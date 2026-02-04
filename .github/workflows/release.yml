@@ -40,7 +40,7 @@ jobs:
           - os: ubuntu-latest
             target: aarch64
           # macOS x86_64
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64
           # macOS arm64
           - os: macos-14
