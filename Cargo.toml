@@ -1,0 +1,23 @@
+[package]
+name = "rustling"
+version = "0.2.0"
+edition = "2021"
+description = "A library for computational linguistics"
+license = "MIT"
+repository = "https://github.com/jacksonllee/rustling"
+readme = "README.md"
+keywords = ["nlp", "linguistics", "text-processing", "word-segmentation"]
+categories = ["text-processing", "science"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "rustling"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.25.1", features = ["abi3-py310"] }
+rand = "0.9"
+rayon = "1.10"
+
+[features]
+extension-module = ["pyo3/extension-module"]

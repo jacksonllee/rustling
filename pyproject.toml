@@ -1,0 +1,69 @@
+[build-system]
+requires = ["maturin>=1.9"]
+build-backend = "maturin"
+
+[project]
+name = "rustling"
+description = "A library for computational linguistics"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT License" }
+authors = [ { name = "Jackson L. Lee", email = "jacksonlunlee@gmail.com" } ]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Text Processing",
+    "Topic :: Text Processing :: General",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Text Processing :: Linguistic",
+]
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["extension-module"]
+python-source = "python"
+module-name = "rustling._lib_name"
+python-packages = ["rustling"]
+
+[tool.pytest.ini_options]
+addopts = "-vv --strict-markers"
+testpaths = ["python/tests"]
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "black >= 26.1.0",
+    "flake8 >= 7.3.0",
+    "mypy >= 1.19.1",
+    "pytest >= 9.0.2",
+]
