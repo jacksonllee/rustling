@@ -78,6 +78,7 @@ Requires: `pip install wordseg` for comparison. Build with `--release` for accur
 ## Conventions
 
 - **Rust docstrings**: Use `///` for public items, `//!` for module-level docs
+- **Rust code style**: Must pass `cargo fmt` and `cargo clippy` (enforced by GitHub Actions CI)
 - **Python docstrings**: NumPy style
 - **Type stubs**: `.pyi` files mirror the Python package structure
 - **Tests**: Rust tests are inline (`#[cfg(test)]`), Python tests in `python/tests/`

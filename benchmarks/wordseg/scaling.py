@@ -28,7 +28,9 @@ class ScalingPoint:
     speedup: float | None
 
 
-def generate_data(num_words: int, num_sentences: int) -> tuple[list[tuple[str, ...]], list[str]]:
+def generate_data(
+    num_words: int, num_sentences: int
+) -> tuple[list[tuple[str, ...]], list[str]]:
     """Generate training and test data."""
     import string
 
@@ -150,6 +152,7 @@ def run_scaling_benchmark(
 
     try:
         from rustling.wordseg import LongestStringMatching as RustlingLSM
+
         rustling_cls = RustlingLSM
         print("✓ rustling available")
     except ImportError as e:
@@ -157,6 +160,7 @@ def run_scaling_benchmark(
 
     try:
         from wordseg import LongestStringMatching as WordsegLSM
+
         wordseg_cls = WordsegLSM
         print("✓ wordseg available")
     except ImportError as e:
@@ -173,17 +177,21 @@ def run_scaling_benchmark(
     random.seed(42)
     points = []
 
-    print("\n{:>10} {:>12} {:>12} {:>10}".format(
-        "Size", "rustling", "wordseg", "Speedup"
-    ))
+    print(
+        "\n{:>10} {:>12} {:>12} {:>10}".format("Size", "rustling", "wordseg", "Speedup")
+    )
     print("-" * 50)
 
     for size in sizes:
         point = benchmark_at_size(size, rustling_cls, wordseg_cls)
         points.append(point)
 
-        rustling_str = f"{point.rustling_time*1000:.1f}ms" if point.rustling_time else "N/A"
-        wordseg_str = f"{point.wordseg_time*1000:.1f}ms" if point.wordseg_time else "N/A"
+        rustling_str = (
+            f"{point.rustling_time*1000:.1f}ms" if point.rustling_time else "N/A"
+        )
+        wordseg_str = (
+            f"{point.wordseg_time*1000:.1f}ms" if point.wordseg_time else "N/A"
+        )
         speedup_str = f"{point.speedup:.1f}x" if point.speedup else "N/A"
 
         print(f"{size:>10} {rustling_str:>12} {wordseg_str:>12} {speedup_str:>10}")
@@ -195,9 +203,7 @@ def run_scaling_benchmark(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Benchmark scaling with data size"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark scaling with data size")
     parser.add_argument(
         "--plot",
         action="store_true",

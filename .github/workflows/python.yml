@@ -21,10 +21,10 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Check formatting with black
-        run: uvx black --check python/
+        run: uvx black --check python/ benchmarks/
 
       - name: Lint with flake8
-        run: uvx flake8 python/
+        run: uvx flake8 python/ benchmarks/
 
       - name: Type check with mypy
         run: uvx mypy python/rustling/
@@ -55,3 +55,50 @@ jobs:
 
       - name: Run tests
         run: uv run pytest python/tests/ -v
+
+  # This job should be the same as the "python-sdist" job in release.yml, but without the artifact upload.
+  sdist:
+    name: Build source distribution (release readiness check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+  # This job should be the same as the "python-wheels" job in release.yml, but without the artifact upload.
+  wheels:
+    name: Build wheels on ${{ matrix.os }} (${{ matrix.target }}) (release readiness check)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64
+          # Linux aarch64
+          - os: ubuntu-latest
+            target: aarch64
+          # macOS x86_64
+          - os: macos-15-intel
+            target: x86_64
+          # macOS arm64
+          - os: macos-14
+            target: aarch64
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          sccache: "true"
+          manylinux: auto

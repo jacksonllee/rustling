@@ -1,0 +1,3 @@
+# Ignore these files for GitHub's Linguist language detection
+python/**/*.pyi linguist-generated
+benchmarks/** linguist-generated

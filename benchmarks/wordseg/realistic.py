@@ -19,37 +19,200 @@ import time
 import random
 from typing import Any
 
-
 # Sample text data for different "languages" / use cases
 # In real Chinese text, there are no spaces - perfect for word segmentation
 SAMPLE_CHINESE_WORDS = [
-    "我", "你", "他", "她", "它", "我們", "你們", "他們",
-    "是", "不是", "有", "沒有", "在", "不在", "會", "不會",
-    "這", "那", "這個", "那個", "這裡", "那裡", "這些", "那些",
-    "很", "非常", "特別", "相當", "極其", "十分",
-    "好", "壞", "大", "小", "多", "少", "高", "低",
-    "今天", "明天", "昨天", "現在", "以前", "以後",
-    "學習", "工作", "生活", "研究", "發展", "進步",
-    "中國", "美國", "日本", "英國", "法國", "德國",
-    "北京", "上海", "廣州", "深圳", "香港", "台北",
-    "電腦", "手機", "網路", "軟體", "程式", "程式碼",
-    "人工智慧", "機器學習", "深度學習", "自然語言處理",
-    "大數據", "雲端運算", "網際網路", "物聯網",
+    "我",
+    "你",
+    "他",
+    "她",
+    "它",
+    "我們",
+    "你們",
+    "他們",
+    "是",
+    "不是",
+    "有",
+    "沒有",
+    "在",
+    "不在",
+    "會",
+    "不會",
+    "這",
+    "那",
+    "這個",
+    "那個",
+    "這裡",
+    "那裡",
+    "這些",
+    "那些",
+    "很",
+    "非常",
+    "特別",
+    "相當",
+    "極其",
+    "十分",
+    "好",
+    "壞",
+    "大",
+    "小",
+    "多",
+    "少",
+    "高",
+    "低",
+    "今天",
+    "明天",
+    "昨天",
+    "現在",
+    "以前",
+    "以後",
+    "學習",
+    "工作",
+    "生活",
+    "研究",
+    "發展",
+    "進步",
+    "中國",
+    "美國",
+    "日本",
+    "英國",
+    "法國",
+    "德國",
+    "北京",
+    "上海",
+    "廣州",
+    "深圳",
+    "香港",
+    "台北",
+    "電腦",
+    "手機",
+    "網路",
+    "軟體",
+    "程式",
+    "程式碼",
+    "人工智慧",
+    "機器學習",
+    "深度學習",
+    "自然語言處理",
+    "大數據",
+    "雲端運算",
+    "網際網路",
+    "物聯網",
 ]
 
 SAMPLE_ENGLISH_WORDS = [
-    "the", "be", "to", "of", "and", "a", "in", "that", "have", "I",
-    "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-    "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-    "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-    "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-    "when", "make", "can", "like", "time", "no", "just", "him", "know", "take",
-    "people", "into", "year", "your", "good", "some", "could", "them", "see", "other",
-    "than", "then", "now", "look", "only", "come", "its", "over", "think", "also",
-    "back", "after", "use", "two", "how", "our", "work", "first", "well", "way",
-    "even", "new", "want", "because", "any", "these", "give", "day", "most", "us",
-    "word", "segmentation", "algorithm", "implementation", "performance", "benchmark",
-    "processing", "language", "natural", "computational", "linguistics", "research",
+    "the",
+    "be",
+    "to",
+    "of",
+    "and",
+    "a",
+    "in",
+    "that",
+    "have",
+    "I",
+    "it",
+    "for",
+    "not",
+    "on",
+    "with",
+    "he",
+    "as",
+    "you",
+    "do",
+    "at",
+    "this",
+    "but",
+    "his",
+    "by",
+    "from",
+    "they",
+    "we",
+    "say",
+    "her",
+    "she",
+    "or",
+    "an",
+    "will",
+    "my",
+    "one",
+    "all",
+    "would",
+    "there",
+    "their",
+    "what",
+    "so",
+    "up",
+    "out",
+    "if",
+    "about",
+    "who",
+    "get",
+    "which",
+    "go",
+    "me",
+    "when",
+    "make",
+    "can",
+    "like",
+    "time",
+    "no",
+    "just",
+    "him",
+    "know",
+    "take",
+    "people",
+    "into",
+    "year",
+    "your",
+    "good",
+    "some",
+    "could",
+    "them",
+    "see",
+    "other",
+    "than",
+    "then",
+    "now",
+    "look",
+    "only",
+    "come",
+    "its",
+    "over",
+    "think",
+    "also",
+    "back",
+    "after",
+    "use",
+    "two",
+    "how",
+    "our",
+    "work",
+    "first",
+    "well",
+    "way",
+    "even",
+    "new",
+    "want",
+    "because",
+    "any",
+    "these",
+    "give",
+    "day",
+    "most",
+    "us",
+    "word",
+    "segmentation",
+    "algorithm",
+    "implementation",
+    "performance",
+    "benchmark",
+    "processing",
+    "language",
+    "natural",
+    "computational",
+    "linguistics",
+    "research",
 ]
 
 
@@ -117,7 +280,8 @@ def benchmark_implementation(
         "train_time_min": min(train_times),
         "predict_time_avg": sum(predict_times) / len(predict_times),
         "predict_time_min": min(predict_times),
-        "total_time_avg": sum(train_times) / len(train_times) + sum(predict_times) / len(predict_times),
+        "total_time_avg": sum(train_times) / len(train_times)
+        + sum(predict_times) / len(predict_times),
     }
 
 
@@ -155,6 +319,7 @@ def run_realistic_benchmark(
 
     try:
         from rustling.wordseg import LongestStringMatching as RustlingLSM
+
         rustling_cls = RustlingLSM
         print("\n✓ rustling available")
     except ImportError as e:
@@ -162,6 +327,7 @@ def run_realistic_benchmark(
 
     try:
         from wordseg import LongestStringMatching as WordsegLSM
+
         wordseg_cls = WordsegLSM
         print("✓ wordseg (Python) available")
     except ImportError as e:
@@ -181,20 +347,30 @@ def run_realistic_benchmark(
             rustling_cls, training, test, max_word_length, iterations
         )
         r = results["rustling"]
-        print(f"\nrustling (Rust):")
-        print(f"  Training:   {r['train_time_avg']*1000:.2f}ms (min: {r['train_time_min']*1000:.2f}ms)")
-        print(f"  Prediction: {r['predict_time_avg']*1000:.2f}ms (min: {r['predict_time_min']*1000:.2f}ms)")
-        print(f"  Throughput: {num_sentences/r['predict_time_avg']:,.0f} sentences/sec")
+        train_avg = r["train_time_avg"] * 1000
+        train_min = r["train_time_min"] * 1000
+        pred_avg = r["predict_time_avg"] * 1000
+        pred_min = r["predict_time_min"] * 1000
+        throughput = num_sentences / r["predict_time_avg"]
+        print("\nrustling (Rust):")
+        print(f"  Training:   {train_avg:.2f}ms (min: {train_min:.2f}ms)")
+        print(f"  Prediction: {pred_avg:.2f}ms (min: {pred_min:.2f}ms)")
+        print(f"  Throughput: {throughput:,.0f} sentences/sec")
 
     if wordseg_cls:
         results["wordseg"] = benchmark_implementation(
             wordseg_cls, training, test, max_word_length, iterations
         )
         r = results["wordseg"]
-        print(f"\nwordseg (Python):")
-        print(f"  Training:   {r['train_time_avg']*1000:.2f}ms (min: {r['train_time_min']*1000:.2f}ms)")
-        print(f"  Prediction: {r['predict_time_avg']*1000:.2f}ms (min: {r['predict_time_min']*1000:.2f}ms)")
-        print(f"  Throughput: {num_sentences/r['predict_time_avg']:,.0f} sentences/sec")
+        train_avg = r["train_time_avg"] * 1000
+        train_min = r["train_time_min"] * 1000
+        pred_avg = r["predict_time_avg"] * 1000
+        pred_min = r["predict_time_min"] * 1000
+        throughput = num_sentences / r["predict_time_avg"]
+        print("\nwordseg (Python):")
+        print(f"  Training:   {train_avg:.2f}ms (min: {train_min:.2f}ms)")
+        print(f"  Prediction: {pred_avg:.2f}ms (min: {pred_min:.2f}ms)")
+        print(f"  Throughput: {throughput:,.0f} sentences/sec")
 
     # Comparison
     if rustling_cls and wordseg_cls:
@@ -202,22 +378,28 @@ def run_realistic_benchmark(
         print("COMPARISON")
         print(f"{'='*50}")
 
-        train_speedup = results["wordseg"]["train_time_avg"] / results["rustling"]["train_time_avg"]
-        predict_speedup = results["wordseg"]["predict_time_avg"] / results["rustling"]["predict_time_avg"]
-        total_speedup = results["wordseg"]["total_time_avg"] / results["rustling"]["total_time_avg"]
+        train_speedup = (
+            results["wordseg"]["train_time_avg"] / results["rustling"]["train_time_avg"]
+        )
+        predict_speedup = (
+            results["wordseg"]["predict_time_avg"]
+            / results["rustling"]["predict_time_avg"]
+        )
+        total_speedup = (
+            results["wordseg"]["total_time_avg"] / results["rustling"]["total_time_avg"]
+        )
 
         print(f"\n⚡ Training speedup:   {train_speedup:.1f}x faster")
         print(f"⚡ Prediction speedup: {predict_speedup:.1f}x faster")
         print(f"⚡ Overall speedup:    {total_speedup:.1f}x faster")
 
         if predict_speedup > 1:
-            print(f"\n🚀 rustling processes {predict_speedup:.1f}x more sentences per second!")
+            msg = f"\n🚀 rustling processes {predict_speedup:.1f}x more sentences"
+            print(msg + " per second!")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Benchmark with realistic text data"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark with realistic text data")
     parser.add_argument(
         "--lang",
         choices=["chinese", "english"],

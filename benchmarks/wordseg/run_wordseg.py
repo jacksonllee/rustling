@@ -280,11 +280,15 @@ def benchmark_random_segmenter(
 def print_result(result: BenchmarkResult) -> None:
     """Print a benchmark result."""
     print(f"  {result.implementation}:")
-    print(f"    Total time: {result.time_seconds:.4f}s ({result.iterations} iterations)")
+    print(
+        f"    Total time: {result.time_seconds:.4f}s ({result.iterations} iterations)"
+    )
     print(f"    Sentences/second: {result.sentences_per_second:,.0f}")
 
 
-def print_comparison(rustling_result: BenchmarkResult, wordseg_result: BenchmarkResult) -> None:
+def print_comparison(
+    rustling_result: BenchmarkResult, wordseg_result: BenchmarkResult
+) -> None:
     """Print comparison between rustling and wordseg."""
     comparison = ComparisonResult(
         benchmark_name=rustling_result.name,
@@ -293,7 +297,8 @@ def print_comparison(rustling_result: BenchmarkResult, wordseg_result: Benchmark
     )
     print(f"\n  ⚡ Speedup: {comparison.speedup:.1f}x faster")
     if comparison.speedup > 1:
-        print(f"     rustling is {comparison.speedup:.1f}x faster than pure Python wordseg")
+        speedup = comparison.speedup
+        print(f"     rustling is {speedup:.1f}x faster than pure Python wordseg")
     elif comparison.speedup < 1:
         print(f"     wordseg is {1/comparison.speedup:.1f}x faster than rustling")
     else:
@@ -384,7 +389,7 @@ def run_benchmarks(
 
         # Benchmark LongestStringMatching
         if verbose:
-            print(f"\n📊 LongestStringMatching:")
+            print("\n📊 LongestStringMatching:")
 
         lsm_rustling, lsm_wordseg = benchmark_longest_string_matching(
             rustling_lsm,
@@ -403,7 +408,7 @@ def run_benchmarks(
 
         # Benchmark RandomSegmenter
         if verbose:
-            print(f"\n📊 RandomSegmenter:")
+            print("\n📊 RandomSegmenter:")
 
         rs_rustling, rs_wordseg = benchmark_random_segmenter(
             rustling_rs,
@@ -470,13 +475,13 @@ def run_benchmarks(
 
         if "LongestStringMatching" in all_results["summary"]:
             s = all_results["summary"]["LongestStringMatching"]
-            print(f"\nLongestStringMatching:")
+            print("\nLongestStringMatching:")
             print(f"  Average speedup: {s['avg_speedup']:.1f}x")
             print(f"  Range: {s['min_speedup']:.1f}x - {s['max_speedup']:.1f}x")
 
         if "RandomSegmenter" in all_results["summary"]:
             s = all_results["summary"]["RandomSegmenter"]
-            print(f"\nRandomSegmenter:")
+            print("\nRandomSegmenter:")
             print(f"  Average speedup: {s['avg_speedup']:.1f}x")
             print(f"  Range: {s['min_speedup']:.1f}x - {s['max_speedup']:.1f}x")
 
