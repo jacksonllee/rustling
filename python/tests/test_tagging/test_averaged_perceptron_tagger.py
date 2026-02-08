@@ -1,11 +1,11 @@
-"""Tests for rustling.taggers.AveragedPerceptronTagger."""
+"""Tests for rustling.tagging.AveragedPerceptronTagger."""
 
 import os
 import tempfile
 
 import pytest
 
-from rustling.taggers import AveragedPerceptronTagger
+from rustling.tagging import AveragedPerceptronTagger
 
 
 def test_init_default():

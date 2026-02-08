@@ -4,7 +4,7 @@ This file provides guidance for Claude when working with this repository.
 
 ## Project Overview
 
-**rustling** is a computational linguistics library implemented in Rust with Python bindings via PyO3.
+**Rustling** is a computational linguistics library implemented in Rust with Python bindings via PyO3.
 
 ## Repository Structure
 
@@ -57,28 +57,14 @@ uvx mypy python/rustling/
 
 ## Benchmarking
 
-Benchmark scripts live in `benchmarks/` to compare rustling vs pure Python wordseg:
-
-```bash
-# Quick benchmark
-python benchmarks/run_wordseg.py --quick
-
-# Full benchmark suite
-python benchmarks/run_wordseg.py
-
-# Scaling benchmark with ASCII chart
-python benchmarks/scaling.py --plot
-
-# Realistic Chinese text simulation
-python benchmarks/realistic.py
-```
-
-Requires: `pip install wordseg` for comparison. Build with `--release` for accurate results.
+Benchmark scripts live in `benchmarks/` to compare Rustling vs Python implementations.
+See `benchmarks/README.md`.
 
 ## Conventions
 
 - **Rust docstrings**: Use `///` for public items, `//!` for module-level docs
 - **Rust code style**: Must pass `cargo fmt` and `cargo clippy` (enforced by GitHub Actions CI)
+- **Python code style**: `python/rustling/` and `benchmarks/` must be compliant with `black` and `flake8` (max-line-length = 88)
 - **Python docstrings**: NumPy style
 - **Type stubs**: `.pyi` files mirror the Python package structure
 - **Tests**: Rust tests are inline (`#[cfg(test)]`), Python tests in `python/tests/`

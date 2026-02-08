@@ -4,6 +4,8 @@ accessible-pygments==0.0.5
     # via pydata-sphinx-theme
 alabaster==1.0.0
     # via sphinx
+astroid==4.0.4
+    # via sphinx-autoapi
 babel==2.18.0
     # via
     #   pydata-sphinx-theme
@@ -23,7 +25,9 @@ idna==3.11
 imagesize==1.4.1
     # via sphinx
 jinja2==3.1.6
-    # via sphinx
+    # via
+    #   sphinx
+    #   sphinx-autoapi
 markupsafe==3.0.3
     # via jinja2
 packaging==26.0
@@ -35,6 +39,8 @@ pygments==2.19.2
     #   accessible-pygments
     #   pydata-sphinx-theme
     #   sphinx
+pyyaml==6.0.3
+    # via sphinx-autoapi
 requests==2.32.5
     # via sphinx
 roman-numerals==4.1.0
@@ -47,6 +53,9 @@ sphinx==9.1.0
     # via
     #   rustling (pyproject.toml:docs)
     #   pydata-sphinx-theme
+    #   sphinx-autoapi
+sphinx-autoapi==3.6.1
+    # via rustling (pyproject.toml:docs)
 sphinxcontrib-applehelp==2.0.0
     # via sphinx
 sphinxcontrib-devhelp==2.0.0

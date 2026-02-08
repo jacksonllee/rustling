@@ -16,8 +16,22 @@ copyright = f"2026, {author}"
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
-    "sphinx.ext.viewcode",
+    "autoapi.extension",
 ]
+
+napoleon_google_docstring = True
+napoleon_numpy_docstring = False
+
+autoapi_dirs = ["../rustling"]
+autoapi_file_patterns = ["*.pyi", "*.py"]  # prioritize .pyi stubs
+autoapi_ignore = ["*/_lib_name*"]
+autoapi_options = [
+    "members",
+    "undoc-members",
+    "show-inheritance",
+    "imported-members",
+]
+autoapi_add_toctree_entry = False
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]

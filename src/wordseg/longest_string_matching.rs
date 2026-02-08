@@ -13,7 +13,7 @@ use rayon::prelude::*;
 #[derive(Clone)]
 pub struct LongestStringMatching {
     max_word_length: usize,
-    trie: Trie<char>,
+    trie: Trie<char, ()>,
 }
 
 #[pymethods]
@@ -59,7 +59,7 @@ impl LongestStringMatching {
                 // Don't waste memory for words of length 1,
                 // which are practically useless for this algorithm.
                 if word.chars().count() > 1 {
-                    self.trie.insert(word.chars());
+                    self.trie.insert_seq(word.chars());
                 }
             }
         }

@@ -15,16 +15,13 @@ class LongestStringMatching:
     def __init__(self, *, max_word_length: int) -> None:
         """Initialize a longest string matching segmenter.
 
-        Parameters
-        ----------
-        max_word_length : int
-            Maximum word length in the segmented sentences during prediction.
-            Must be >= 2 to be meaningful.
+        Args:
+            max_word_length: Maximum word length in the segmented
+                sentences during prediction. Must be >= 2 to be
+                meaningful.
 
-        Raises
-        ------
-        ValueError
-            If max_word_length is < 2.
+        Raises:
+            ValueError: If max_word_length is < 2.
         """
         ...
 
@@ -34,25 +31,19 @@ class LongestStringMatching:
         No cleaning or preprocessing (e.g., normalizing upper/lowercase,
         tokenization) is performed on the training data.
 
-        Parameters
-        ----------
-        sents : Sequence[Sequence[str]]
-            An iterable of segmented sentences (each sentence is a
-            sequence of words).
+        Args:
+            sents: An iterable of segmented sentences (each sentence is
+                a sequence of words).
         """
         ...
 
     def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
         """Segment the given unsegmented sentences.
 
-        Parameters
-        ----------
-        sent_strs : Sequence[str]
-            An iterable of unsegmented sentences.
+        Args:
+            sent_strs: An iterable of unsegmented sentences.
 
-        Returns
-        -------
-        list[list[str]]
+        Returns:
             A list of segmented sentences.
         """
         ...
@@ -67,45 +58,33 @@ class RandomSegmenter:
     def __init__(self, *, prob: float) -> None:
         """Initialize a random segmenter.
 
-        Parameters
-        ----------
-        prob : float
-            The probability from [0, 1) that segmentation occurs
-            between two symbols.
+        Args:
+            prob: The probability from [0, 1) that segmentation occurs
+                between two symbols.
 
-        Raises
-        ------
-        ValueError
-            If prob is outside [0, 1).
+        Raises:
+            ValueError: If prob is outside [0, 1).
         """
         ...
 
     def fit(self, sents: Sequence[Sequence[str]]) -> None:
         """Training is not required for RandomSegmenter.
 
-        Parameters
-        ----------
-        sents : Sequence[Sequence[str]]
-            Unused.
+        Args:
+            sents: Unused.
 
-        Raises
-        ------
-        NotImplementedError
-            Always, since no training is needed.
+        Raises:
+            NotImplementedError: Always, since no training is needed.
         """
         ...
 
     def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
         """Segment the given unsegmented sentences.
 
-        Parameters
-        ----------
-        sent_strs : Sequence[str]
-            An iterable of unsegmented sentences.
+        Args:
+            sent_strs: An iterable of unsegmented sentences.
 
-        Returns
-        -------
-        list[list[str]]
+        Returns:
             A list of segmented sentences.
         """
         ...

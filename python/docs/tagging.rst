@@ -9,7 +9,7 @@ based on the averaged perceptron algorithm.
 
 .. code-block:: python
 
-   from rustling.taggers import AveragedPerceptronTagger
+   from rustling.tagging import AveragedPerceptronTagger
 
    # Initialize the tagger
    tagger = AveragedPerceptronTagger()

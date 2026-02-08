@@ -1,4 +1,4 @@
-//! POS taggers.
+//! POS tagging.
 //!
 //! This module provides part-of-speech taggers that can be trained on
 //! tagged sentences and used to predict POS tags for new text.
@@ -6,7 +6,7 @@
 //! ## Example
 //!
 //! ```rust
-//! use rustling::taggers::AveragedPerceptronTagger;
+//! use rustling::tagging::AveragedPerceptronTagger;
 //!
 //! // Create a tagger with default parameters
 //! // (frequency_threshold=20, ambiguity_threshold=0.97, n_iter=5)
@@ -38,10 +38,10 @@ pub use averaged_perceptron_tagger::AveragedPerceptronTagger;
 
 use pyo3::prelude::*;
 
-/// Register the taggers submodule with Python.
+/// Register the tagging submodule with Python.
 pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let taggers_module = PyModule::new(parent_module.py(), "taggers")?;
-    taggers_module.add_class::<AveragedPerceptronTagger>()?;
-    parent_module.add_submodule(&taggers_module)?;
+    let tagging_module = PyModule::new(parent_module.py(), "tagging")?;
+    tagging_module.add_class::<AveragedPerceptronTagger>()?;
+    parent_module.add_submodule(&tagging_module)?;
     Ok(())
 }
