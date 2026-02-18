@@ -22,12 +22,12 @@
 //!          ("fast".to_string(), "JJ".to_string())],
 //! ];
 //!
-//! // Train the tagger
-//! tagger.train(training_data);
+//! // Fit the tagger
+//! tagger.fit(training_data);
 //!
-//! // Tag a sentence
+//! // Predict tags for a sentence
 //! let sentence = vec!["I".to_string(), "love".to_string(), "Rust".to_string()];
-//! let tags = tagger.tag(sentence);
+//! let tags = tagger.predict(sentence);
 //! println!("{:?}", tags);
 //! // ["PRP", "VBP", "NNP"]
 //! ```

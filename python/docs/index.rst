@@ -4,11 +4,29 @@ Rustling
 Rustling is a blazingly fast library for computational linguistics.
 It is written in Rust, with Python bindings.
 
+.. toctree::
+   :maxdepth: 1
+
+   lm
+   ngram
+   wordseg
+   tagging
+   chat
+   api
+
+
+Installation
+------------
+
+.. code-block:: bash
+
+   pip install rustling
+
 
 Performance
 -----------
 
-Benchmarked against pure Python implementataions from NLTK and wordseg.
+Benchmarked against pure Python implementations from NLTK, wordseg (v0.0.5), and pylangacq (v0.19.1).
 See `benchmarks/ <https://github.com/jacksonllee/rustling/tree/main/benchmarks>`_
 for full details and reproduction scripts.
 
@@ -22,7 +40,7 @@ for full details and reproduction scripts.
      - vs.
    * - **Language Models**
      - Fit
-     - **11x**
+     - **10x**
      - NLTK
    * -
      - Score
@@ -30,15 +48,15 @@ for full details and reproduction scripts.
      - NLTK
    * -
      - Generate
-     - **25–39x**
+     - **80–112x**
      - NLTK
    * - **Word Segmentation**
      - LongestStringMatching
-     - **14x**
+     - **9x**
      - wordseg
    * -
      - RandomSegmenter
-     - **12x**
+     - **1.1x**
      - wordseg
    * - **POS Tagging**
      - Training
@@ -46,27 +64,32 @@ for full details and reproduction scripts.
      - NLTK
    * -
      - Tagging
-     - **6x**
+     - **7x**
      - NLTK
-
-Installation
-------------
-
-.. code-block:: bash
-
-   pip install rustling
-
-
-Sections
---------
-
-.. toctree::
-   :maxdepth: 2
-
-   lm
-   wordseg
-   tagging
-   api
+   * - **CHAT Parsing**
+     - from_dir
+     - **55x**
+     - pylangacq
+   * -
+     - from_zip
+     - **48x**
+     - pylangacq
+   * -
+     - from_files
+     - **63x**
+     - pylangacq
+   * -
+     - from_strs
+     - **116x**
+     - pylangacq
+   * -
+     - words()
+     - **3x**
+     - pylangacq
+   * -
+     - utterances()
+     - **15x**
+     - pylangacq
 
 
 Source Code

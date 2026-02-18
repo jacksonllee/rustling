@@ -1,4 +1,4 @@
-"""Type stubs for rustling.tagging."""
+"""Part-of-speech tagging."""
 
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ class AveragedPerceptronTagger:
         """
         ...
 
-    def tag(self, words: Sequence[str]) -> list[str]:
-        """Tag the words.
+    def predict(self, words: Sequence[str]) -> list[str]:
+        """Predict tags for the words.
 
         Args:
             words: A segmented sentence or phrase, where each word is
@@ -50,8 +50,8 @@ class AveragedPerceptronTagger:
         """
         ...
 
-    def train(self, tagged_sents: Sequence[Sequence[tuple[str, str]]]) -> None:
-        """Train a model.
+    def fit(self, tagged_sents: Sequence[Sequence[tuple[str, str]]]) -> None:
+        """Fit a model.
 
         Args:
             tagged_sents: A list of segmented and tagged sentences for

@@ -1,34 +1,11 @@
 API Reference
 =============
 
-Language Models
----------------
+.. toctree::
+   :maxdepth: 1
 
-.. autoapiclass:: rustling.lm.LanguageModel
-    :members:
-
-.. autoapiclass:: rustling.lm.MLE
-    :members:
-
-.. autoapiclass:: rustling.lm.Lidstone
-    :members:
-
-.. autoapiclass:: rustling.lm.Laplace
-    :members:
-
-
-Word Segmentation
------------------
-
-.. autoapiclass:: rustling.wordseg.LongestStringMatching
-    :members:
-
-.. autoapiclass:: rustling.wordseg.RandomSegmenter
-    :members:
-
-
-Part-of-Speech Tagging
-----------------------
-
-.. autoapiclass:: rustling.tagging.AveragedPerceptronTagger
-    :members:
+   Language Models </autoapi/rustling/lm/index>
+   N-grams </autoapi/rustling/ngram/index>
+   Word Segmentation </autoapi/rustling/wordseg/index>
+   Part-of-Speech Tagging </autoapi/rustling/tagging/index>
+   CHAT Parsing </autoapi/rustling/chat/index>

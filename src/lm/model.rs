@@ -70,7 +70,7 @@ impl Vocabulary {
 ///
 /// Supports MLE, Lidstone, and Laplace smoothing methods.
 /// This translates NLTK's `LanguageModel` into Rust, using a counting trie
-/// instead of NLTK's `NgramCounter` for n-gram storage.
+/// instead of NLTK's `NgramCounter` (``Ngrams`` in Rustling) for n-gram storage.
 #[pyclass(subclass)]
 #[derive(Clone)]
 pub struct LanguageModel {

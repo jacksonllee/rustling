@@ -6,7 +6,7 @@ Rustling provides n-gram language models with various smoothing methods.
 MLE (Maximum Likelihood Estimation)
 ------------------------------------
 
-The ``MLE`` model uses raw counts to estimate probabilities, with no smoothing.
+The :py:class:`~rustling.lm.MLE` model uses raw counts to estimate probabilities, with no smoothing.
 
 .. code-block:: python
 
@@ -28,7 +28,7 @@ The ``MLE`` model uses raw counts to estimate probabilities, with no smoothing.
 Lidstone Smoothing
 ------------------
 
-The ``Lidstone`` model adds a constant ``gamma`` to all counts,
+The :py:class:`~rustling.lm.Lidstone` model adds a constant ``gamma`` to all counts,
 ensuring non-zero probabilities for unseen n-grams.
 
 .. code-block:: python
@@ -47,7 +47,7 @@ ensuring non-zero probabilities for unseen n-grams.
 Laplace Smoothing
 -----------------
 
-The ``Laplace`` model is Lidstone smoothing with ``gamma=1``.
+The :py:class:`~rustling.lm.Laplace` model is Lidstone smoothing with ``gamma=1``.
 
 .. code-block:: python
 

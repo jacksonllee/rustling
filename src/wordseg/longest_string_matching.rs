@@ -2,6 +2,7 @@
 
 use crate::trie::Trie;
 use pyo3::prelude::*;
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 /// Longest string matching segmenter.
@@ -75,11 +76,12 @@ impl LongestStringMatching {
     ///
     /// A list of segmented sentences.
     pub fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        // Use parallel iteration for better performance on multiple sentences
-        sent_strs
-            .into_par_iter()
-            .map(|sent_str| self.predict_sent(&sent_str))
-            .collect()
+        #[cfg(feature = "parallel")]
+        let iter = sent_strs.into_par_iter().with_min_len(16);
+        #[cfg(not(feature = "parallel"))]
+        let iter = sent_strs.into_iter();
+
+        iter.map(|sent_str| self.predict_sent(&sent_str)).collect()
     }
 }
 

@@ -1,4 +1,4 @@
-"""Type stubs for rustling.wordseg."""
+"""Word segmentation."""
 
 from __future__ import annotations
 

@@ -65,10 +65,63 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: dist
 
+  # Not using maturin-action for WASM because it doesn't set up Rust nightly, Emscripten SDK, or wasm-eh sysroot.
+  python-wasm-wheel:
+    name: Python - Build wasm32-unknown-emscripten wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-06-27
+          components: rust-src
+
+      - name: Install Emscripten wasm-eh sysroot
+        run: |
+          TOOLCHAIN_ROOT=$(rustup run nightly-2025-06-27 rustc --print sysroot)
+          RUSTLIB=$TOOLCHAIN_ROOT/lib/rustlib
+          wget -q https://github.com/pyodide/rust-emscripten-wasm-eh-sysroot/releases/download/emcc-4.0.9_nightly-2025-06-27/emcc-4.0.9_nightly-2025-06-27.tar.bz2
+          tar -xf emcc-4.0.9_nightly-2025-06-27.tar.bz2 --directory=$RUSTLIB
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "4.0.9"
+          actions-cache-folder: emsdk-cache
+
+      - name: Patch Emscripten for Rust side module exports
+        run: |
+          # Rust side modules have mangled symbol names containing '$' which Emscripten
+          # rejects as invalid export names. These symbols are called from native code,
+          # not JavaScript, so the check is unnecessary for side modules.
+          # Upstream: https://github.com/emscripten-core/emscripten/pull/24359
+          EMSCRIPTEN_DIR=$(em-config EMSCRIPTEN_ROOT)
+          curl -sL https://raw.githubusercontent.com/pyodide/pyodide/refs/heads/main/emsdk/patches/0002-Don-t-check-exports-for-being-valid-C-C-identifiers-.patch | git -C "$EMSCRIPTEN_DIR" apply
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wasm wheel
+        env:
+          RUSTFLAGS: "-Zemscripten-wasm-eh"
+          CFLAGS: "-fPIC"
+        run: uvx maturin build --release --target wasm32-unknown-emscripten --out dist -i 3.13 --no-default-features --features extension-module
+
+      - name: Upload wasm wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-wasm
+          path: dist
+
   python-publish:
     name: Python - Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [python-sdist, python-wheels]
+    needs: [python-sdist, python-wheels, python-wasm-wheel]
     environment:
       name: pypi
       url: https://pypi.org/p/rustling

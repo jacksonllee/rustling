@@ -197,7 +197,7 @@ impl AveragedPerceptronTagger {
         }
     }
 
-    /// Tag the words.
+    /// Predict tags for the words.
     ///
     /// # Arguments
     ///
@@ -206,7 +206,7 @@ impl AveragedPerceptronTagger {
     /// # Returns
     ///
     /// The list of predicted tags.
-    pub fn tag(&self, words: Vec<String>) -> Vec<String> {
+    pub fn predict(&self, words: Vec<String>) -> Vec<String> {
         let n = words.len();
         let mut tags = Vec::with_capacity(n);
 
@@ -264,13 +264,13 @@ impl AveragedPerceptronTagger {
         tags
     }
 
-    /// Train a model.
+    /// Fit a model.
     ///
     /// # Arguments
     ///
     /// * `tagged_sents` - A list of segmented and tagged sentences for training.
     ///   Each sentence is a list of (word, tag) tuples.
-    pub fn train(&mut self, tagged_sents: Vec<Vec<(String, String)>>) {
+    pub fn fit(&mut self, tagged_sents: Vec<Vec<(String, String)>>) {
         self.make_tagdict(&tagged_sents);
         self.model.classes = self.classes.clone();
         self.model.finalize_classes();
@@ -624,9 +624,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tag_empty() {
+    fn test_predict_empty() {
         let tagger = AveragedPerceptronTagger::new(10, 0.95, 5);
-        let tags = tagger.tag(vec![]);
+        let tags = tagger.predict(vec![]);
         assert!(tags.is_empty());
     }
 
@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn test_train_and_tag() {
+    fn test_fit_and_predict() {
         let mut tagger = AveragedPerceptronTagger::new(1, 0.9, 2);
 
         let training_data = vec![
@@ -661,14 +661,14 @@ mod tests {
             ],
         ];
 
-        tagger.train(training_data);
+        tagger.fit(training_data);
 
         // The tagger should have learned something
         assert!(!tagger.classes.is_empty());
 
-        // Test tagging
+        // Test prediction
         let words = vec!["I".to_string(), "love".to_string(), "cats".to_string()];
-        let tags = tagger.tag(words);
+        let tags = tagger.predict(words);
         assert_eq!(tags.len(), 3);
     }
 }

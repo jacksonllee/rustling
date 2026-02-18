@@ -63,7 +63,7 @@ def benchmark_rustling_training(
         gc.collect()
         model = tagger_class()
         start = time.perf_counter()
-        model.train(training_data)
+        model.fit(training_data)
         times.append(time.perf_counter() - start)
     return statistics.mean(times)
 
@@ -85,7 +85,7 @@ def benchmark_rustling_tagging(
         gc.collect()
         start = time.perf_counter()
         for sent in test_sentences:
-            model.tag(sent)
+            model.predict(sent)
         times.append(time.perf_counter() - start)
     return statistics.mean(times)
 
@@ -239,7 +239,7 @@ def run_benchmarks(
     rustling_tag_time = None
     if rustling_info["available"]:
         model = rustling_info["class"]()
-        model.train(training_data)
+        model.fit(training_data)
         rustling_tag_time = benchmark_rustling_tagging(
             model, test_sentences, tag_iterations
         )

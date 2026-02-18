@@ -1,6 +1,6 @@
 [package]
 name = "rustling"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "A blazingly fast library for computational linguistics"
 license = "MIT"
@@ -8,7 +8,7 @@ repository = "https://github.com/jacksonllee/rustling"
 documentation = "https://docs.rs/rustling"
 readme = "README.md"
 keywords = ["nlp", "linguistics", "text-processing", "word-segmentation"]
-categories = ["text-processing", "science"]
+categories = ["science", "text-processing"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -18,10 +18,17 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 pyo3 = { version = "0.25.1", features = ["abi3-py310"] }
 rand = "0.9"
-rayon = "1.10"
+rayon = { version = "1.10", optional = true }
+fancy-regex = "0.14"
+regex = "1"
 rustc-hash = "2.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+zip = "2"
 
 [features]
+default = ["parallel"]
 extension-module = ["pyo3/extension-module"]
+parallel = ["rayon"]

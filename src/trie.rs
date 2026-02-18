@@ -384,6 +384,45 @@ impl<K: Eq + Hash + Clone> CountTrie<K> {
             None => Vec::new(),
         }
     }
+
+    /// Collect all sequences with their counts.
+    ///
+    /// Returns a vector of `(sequence, count)` pairs by recursively walking
+    /// the trie. The order of entries is not guaranteed.
+    pub fn all_counts(&self) -> Vec<(Vec<K>, u64)> {
+        let mut result = Vec::with_capacity(self.len());
+        let mut prefix = Vec::new();
+        Self::collect_counts(&self.inner.root, &mut prefix, &mut result);
+        result
+    }
+
+    /// Sum of all counts in the trie.
+    pub fn total_count(&self) -> u64 {
+        Self::sum_counts(&self.inner.root)
+    }
+
+    fn collect_counts(
+        node: &TrieNode<K, u64>,
+        prefix: &mut Vec<K>,
+        result: &mut Vec<(Vec<K>, u64)>,
+    ) {
+        if let Some(count) = node.terminal {
+            result.push((prefix.clone(), count));
+        }
+        for (key, child) in &node.children {
+            prefix.push(key.clone());
+            Self::collect_counts(child, prefix, result);
+            prefix.pop();
+        }
+    }
+
+    fn sum_counts(node: &TrieNode<K, u64>) -> u64 {
+        let mut total = node.terminal.unwrap_or(0);
+        for child in node.children.values() {
+            total += Self::sum_counts(child);
+        }
+        total
+    }
 }
 
 #[cfg(test)]
@@ -627,5 +666,56 @@ mod tests {
 
         trie.clear();
         assert_eq!(trie.get_count(std::iter::once("hello".to_string())), 0);
+    }
+
+    #[test]
+    fn test_count_trie_all_counts_empty() {
+        let trie: CountTrie<String> = CountTrie::new();
+        assert!(trie.all_counts().is_empty());
+    }
+
+    #[test]
+    fn test_count_trie_all_counts() {
+        let mut trie: CountTrie<String> = CountTrie::new();
+        trie.increment(["the", "cat"].iter().map(|s| s.to_string()));
+        trie.increment(["the", "cat"].iter().map(|s| s.to_string()));
+        trie.increment(["the", "dog"].iter().map(|s| s.to_string()));
+        trie.increment(std::iter::once("a".to_string()));
+
+        let mut counts = trie.all_counts();
+        counts.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(counts.len(), 3);
+        assert_eq!(counts[0], (vec!["a".to_string()], 1));
+        assert_eq!(counts[1], (vec!["the".to_string(), "cat".to_string()], 2));
+        assert_eq!(counts[2], (vec!["the".to_string(), "dog".to_string()], 1));
+    }
+
+    #[test]
+    fn test_count_trie_all_counts_length_matches_len() {
+        let mut trie: CountTrie<String> = CountTrie::new();
+        trie.increment(["a", "b"].iter().map(|s| s.to_string()));
+        trie.increment(["a", "c"].iter().map(|s| s.to_string()));
+        trie.increment(std::iter::once("x".to_string()));
+
+        assert_eq!(trie.all_counts().len(), trie.len());
+    }
+
+    #[test]
+    fn test_count_trie_total_count_empty() {
+        let trie: CountTrie<String> = CountTrie::new();
+        assert_eq!(trie.total_count(), 0);
+    }
+
+    #[test]
+    fn test_count_trie_total_count() {
+        let mut trie: CountTrie<String> = CountTrie::new();
+        trie.increment(["the", "cat"].iter().map(|s| s.to_string()));
+        trie.increment(["the", "cat"].iter().map(|s| s.to_string()));
+        trie.increment(["the", "dog"].iter().map(|s| s.to_string()));
+        trie.increment(std::iter::once("a".to_string()));
+
+        // 2 + 1 + 1 = 4
+        assert_eq!(trie.total_count(), 4);
     }
 }

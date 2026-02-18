@@ -4,7 +4,7 @@ Word Segmentation
 Longest String Matching
 ------------------------
 
-The ``LongestStringMatching`` segmenter uses a greedy left-to-right longest match algorithm
+The :py:class:`~rustling.wordseg.LongestStringMatching` segmenter uses a greedy left-to-right longest match algorithm
 to segment unsegmented text into words.
 
 .. code-block:: python
@@ -23,7 +23,7 @@ to segment unsegmented text into words.
 Random Segmenter
 ----------------
 
-The ``RandomSegmenter`` provides a random baseline for word segmentation.
+The :py:class:`~rustling.wordseg.RandomSegmenter` provides a random baseline for word segmentation.
 No training is needed.
 
 .. code-block:: python

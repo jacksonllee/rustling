@@ -54,6 +54,9 @@ jobs:
           uv run maturin develop
 
       - name: Run tests
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PRIVATE_TEST_REPO: ${{ secrets.PRIVATE_TEST_REPO }}
         run: uv run pytest python/tests/ -v
 
   # This job should be the same as the "python-sdist" job in release.yml, but without the artifact upload.
@@ -69,7 +72,7 @@ jobs:
           command: sdist
           args: --out dist
 
-  # This job should be the same as the "python-wheels" job in release.yml, but without the artifact upload.
+  # This job should be similar to the "python-wheels" job in release.yml, but without the artifact upload.
   wheels:
     name: Build wheels on ${{ matrix.os }} (${{ matrix.target }}) (release readiness check)
     runs-on: ${{ matrix.os }}
@@ -102,3 +105,51 @@ jobs:
           args: --release --out dist
           sccache: "true"
           manylinux: auto
+
+  # This job should be similar to the "python-wasm-wheel" job in release.yml, but without the artifact upload.
+  # Not using maturin-action for WASM because it doesn't set up Rust nightly, Emscripten SDK, or wasm-eh sysroot.
+  wasm-wheel:
+    name: Build wasm32-unknown-emscripten wheel (release readiness check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-06-27
+          components: rust-src
+
+      - name: Install Emscripten wasm-eh sysroot
+        run: |
+          TOOLCHAIN_ROOT=$(rustup run nightly-2025-06-27 rustc --print sysroot)
+          RUSTLIB=$TOOLCHAIN_ROOT/lib/rustlib
+          wget -q https://github.com/pyodide/rust-emscripten-wasm-eh-sysroot/releases/download/emcc-4.0.9_nightly-2025-06-27/emcc-4.0.9_nightly-2025-06-27.tar.bz2
+          tar -xf emcc-4.0.9_nightly-2025-06-27.tar.bz2 --directory=$RUSTLIB
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Emscripten SDK
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "4.0.9"
+          actions-cache-folder: emsdk-cache
+
+      - name: Patch Emscripten for Rust side module exports
+        run: |
+          # Rust side modules have mangled symbol names containing '$' which Emscripten
+          # rejects as invalid export names. These symbols are called from native code,
+          # not JavaScript, so the check is unnecessary for side modules.
+          # Upstream: https://github.com/emscripten-core/emscripten/pull/24359
+          EMSCRIPTEN_DIR=$(em-config EMSCRIPTEN_ROOT)
+          curl -sL https://raw.githubusercontent.com/pyodide/pyodide/refs/heads/main/emsdk/patches/0002-Don-t-check-exports-for-being-valid-C-C-identifiers-.patch | git -C "$EMSCRIPTEN_DIR" apply
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wasm wheel
+        env:
+          RUSTFLAGS: "-Zemscripten-wasm-eh"
+          CFLAGS: "-fPIC"
+        run: uvx maturin build --release --target wasm32-unknown-emscripten --out dist -i 3.13 --no-default-features --features extension-module

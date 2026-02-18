@@ -24,15 +24,15 @@ def test_init_custom_params():
     assert tagger.tagdict == {}
 
 
-def test_tag_empty():
-    """Test tagging an empty list of words."""
+def test_predict_empty():
+    """Test predicting on an empty list of words."""
     tagger = AveragedPerceptronTagger()
-    tags = tagger.tag([])
+    tags = tagger.predict([])
     assert tags == []
 
 
-def test_train_and_tag():
-    """Test training and tagging."""
+def test_fit_and_predict():
+    """Test fitting and predicting."""
     tagger = AveragedPerceptronTagger(
         frequency_threshold=1, ambiguity_threshold=0.9, n_iter=2
     )
@@ -41,14 +41,14 @@ def test_train_and_tag():
         [("You", "PRON"), ("love", "VERB"), ("dogs", "NOUN")],
         [("We", "PRON"), ("eat", "VERB"), ("food", "NOUN")],
     ]
-    tagger.train(training_data)
+    tagger.fit(training_data)
 
     # Check that classes are learned
     assert tagger.classes == {"PRON", "VERB", "NOUN"}
 
     # Test tagging
     words = ["I", "love", "cats"]
-    tags = tagger.tag(words)
+    tags = tagger.predict(words)
     assert len(tags) == 3
     # With enough training, the model should get these right
     assert tags == ["PRON", "VERB", "NOUN"]
@@ -63,7 +63,7 @@ def test_save_and_load():
         [("I", "PRON"), ("love", "VERB"), ("cats", "NOUN")],
         [("You", "PRON"), ("love", "VERB"), ("dogs", "NOUN")],
     ]
-    tagger.train(training_data)
+    tagger.fit(training_data)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         model_path = os.path.join(tmpdir, "model.json")
@@ -78,8 +78,8 @@ def test_save_and_load():
 
         # Verify loaded tagger works
         words = ["I", "love", "dogs"]
-        original_tags = tagger.tag(words)
-        loaded_tags = new_tagger.tag(words)
+        original_tags = tagger.predict(words)
+        loaded_tags = new_tagger.predict(words)
         assert loaded_tags == original_tags
 
 
@@ -98,7 +98,7 @@ def test_weights_property():
     training_data = [
         [("hello", "NOUN"), ("world", "NOUN")],
     ]
-    tagger.train(training_data)
+    tagger.fit(training_data)
 
     weights = tagger.weights
     assert isinstance(weights, dict)
@@ -113,7 +113,7 @@ def test_tagdict_property():
         [("hello", "NOUN"), ("world", "NOUN")],
         [("hello", "NOUN"), ("there", "ADV")],
     ]
-    tagger.train(training_data)
+    tagger.fit(training_data)
 
     tagdict = tagger.tagdict
     assert isinstance(tagdict, dict)
