@@ -201,6 +201,7 @@ jobs:
         run: |
           curl -sL "https://github.com/google/flatbuffers/releases/download/v${{ env.FLATC_VERSION }}/Linux.flatc.binary.clang++-18.zip" -o flatc.zip
           unzip -q flatc.zip
+          rm flatc.zip
           chmod +x flatc
           sudo mv flatc /usr/local/bin/
 
