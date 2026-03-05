@@ -8,21 +8,10 @@ repository = "https://github.com/jacksonllee/rustling"
 documentation = "https://docs.rs/rustling"
 readme = "README.md"
 keywords = [
-    "computational-linguistics",
+    # At most 5 keywords per crate. Each keyword must have fewer than 20 characters.
     "linguistics",
-    "natural-language-processing",
     "nlp", 
     "text-processing",
-    "word-segmentation",
-    "part-of-speech-tagging",
-    "language-models",
-    "ngrams",
-    "childes",
-    "talkbank",
-    "chat",
-    "averaged-perceptron",
-    "hidden-markov-model",
-    "longest-string-matching",
 ]
 categories = ["science", "text-processing"]
 
