@@ -64,6 +64,59 @@ class TestCHATFromStrs:
         assert reader.file_paths == ["a", "b"]
 
 
+class TestFromUtterances:
+    def test_round_trip(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        new_reader = CHAT.from_utterances(utts)
+        assert new_reader.n_files == 1
+        new_utts = new_reader.utterances()
+        assert len(new_utts) == len(utts)
+        for orig, rebuilt in zip(utts, new_utts):
+            assert orig == rebuilt
+
+    def test_subset(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        new_reader = CHAT.from_utterances(utts[:1])
+        new_utts = new_reader.utterances()
+        assert len(new_utts) == 1
+        assert new_utts[0].participant == "CHI"
+
+    def test_empty(self):
+        new_reader = CHAT.from_utterances([])
+        assert new_reader.n_files == 1
+        assert len(new_reader.utterances()) == 0
+
+    def test_words(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        new_reader = CHAT.from_utterances(utts)
+        assert new_reader.words() == reader.words()
+
+    def test_to_strs(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        new_reader = CHAT.from_utterances(utts)
+        strs = new_reader.to_strs()
+        assert len(strs) == 1
+        assert "*CHI:" in strs[0]
+        assert "%mor:" in strs[0]
+        assert "@End" in strs[0]
+
+    def test_serialization_round_trip(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        new_reader = CHAT.from_utterances(utts)
+        strs = new_reader.to_strs()
+        reparsed = CHAT.from_strs(strs)
+        reparsed_utts = reparsed.utterances()
+        assert len(reparsed_utts) == len(utts)
+        for orig, reparsed_utt in zip(utts, reparsed_utts):
+            assert orig.participant == reparsed_utt.participant
+            assert orig.tokens == reparsed_utt.tokens
+
+
 class TestUtterances:
     def test_utterances_flat(self):
         reader = CHAT.from_strs([BASIC_CHAT])
@@ -517,6 +570,13 @@ class TestFromDir:
             reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
         assert reader.n_files > 0
 
+    def test_from_dir_with_path(self, testchat_good_dir):
+        """from_dir accepts pathlib.Path directly."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_dir(testchat_good_dir, strict=False)
+        assert reader.n_files > 0
+
     def test_from_dir_with_match(self, testchat_good_dir):
         reader = CHAT.from_dir(str(testchat_good_dir), match="action")
         paths = reader.file_paths
@@ -585,6 +645,25 @@ class TestFromFiles:
                 warnings.simplefilter("ignore")
                 reader = CHAT.from_files(cha_files, strict=False)
             assert reader.n_files == len(cha_files)
+
+    def test_from_files_with_path(self, testchat_good_dir):
+        """from_files accepts pathlib.Path objects in the list."""
+        paths = sorted(testchat_good_dir.glob("*.cha"))[:3]
+        if paths:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                reader = CHAT.from_files(paths, strict=False)
+            assert reader.n_files == len(paths)
+
+    def test_from_files_mixed_str_and_path(self, testchat_good_dir):
+        """from_files accepts a mix of str and pathlib.Path."""
+        all_paths = sorted(testchat_good_dir.glob("*.cha"))[:2]
+        if len(all_paths) >= 2:
+            mixed = [str(all_paths[0]), all_paths[1]]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                reader = CHAT.from_files(mixed, strict=False)
+            assert reader.n_files == 2
 
 
 class TestAppend:
@@ -719,6 +798,23 @@ class TestAdd:
         a += b
         assert b.n_files == 1
         assert b.file_paths == ["b"]
+
+
+class TestBool:
+    def test_empty_default_is_falsy(self):
+        assert not CHAT()
+
+    def test_empty_from_strs_is_falsy(self):
+        assert not CHAT.from_strs([])
+
+    def test_with_data_is_truthy(self):
+        reader = CHAT.from_strs(["@UTF8\n@Begin\n*CHI:\thi .\n@End\n"])
+        assert reader
+
+    def test_after_clear_is_falsy(self):
+        reader = CHAT.from_strs(["@UTF8\n@Begin\n*CHI:\thi .\n@End\n"])
+        reader.clear()
+        assert not reader
 
 
 THREE_FILES = [
@@ -931,6 +1027,14 @@ class TestToChat:
     def test_to_chat_single_file(self, tmp_path):
         reader = CHAT.from_strs([BASIC_CHAT])
         out = str(tmp_path / "output.cha")
+        reader.to_chat(out)
+        reader2 = CHAT.from_files([out])
+        assert reader2.words() == reader.words()
+
+    def test_to_chat_with_path(self, tmp_path):
+        """to_chat accepts pathlib.Path directly."""
+        reader = CHAT.from_strs([BASIC_CHAT])
+        out = tmp_path / "output.cha"
         reader.to_chat(out)
         reader2 = CHAT.from_files([out])
         assert reader2.words() == reader.words()

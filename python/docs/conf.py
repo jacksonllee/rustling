@@ -16,8 +16,14 @@ copyright = f"2026, {author}"
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
+    "sphinx.ext.intersphinx",
     "autoapi.extension",
+    "sphinx_copybutton",
 ]
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+}
 
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
@@ -42,6 +48,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 html_theme = "pydata_sphinx_theme"
 html_static_path = ["_static"]
 html_show_sourcelink = False
+html_logo = "_static/logo-with-text.svg"
+html_favicon = "_static/favicon.ico"
 
 html_sidebars = {
     # Remove the primary/left sidebar for all pages.
@@ -51,4 +59,6 @@ html_sidebars = {
 html_theme_options = {
     "show_toc_level": 3,
     "secondary_sidebar_items": ["page-toc", "sidebar-ethical-ads.html"],
+    "footer_start": ["sphinx-version"],
+    "footer_center": ["copyright"],
 }

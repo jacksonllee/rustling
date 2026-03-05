@@ -1,0 +1,34 @@
+// FlatBuffers schema for HMM model serialization.
+// Used by rustling's save_hmm_flatbuffers / load_hmm_flatbuffers.
+
+namespace rustling.hmm_fbs;
+
+table VocabEntry {
+    key:          string (required);
+    emission_idx: uint32;
+}
+
+table FeatureVocab {
+    entries: [VocabEntry] (required);
+}
+
+table EmissionMatrix {
+    // Flat row-major 2D array: row = state index, col = emission index.
+    // Shape: n_states × vocab_size.
+    // f32::NEG_INFINITY encodes "unseen" entries.
+    n_states:   uint32;
+    vocab_size: uint32;
+    values:     [float] (required);
+}
+
+table HmmModel {
+    n_states:          uint32;
+    state_labels:      [string];
+    log_initial:       [float] (required);
+    log_transition:    [float] (required);    // flat row-major n_states × n_states
+    feature_vocabs:    [FeatureVocab] (required);
+    feature_emissions: [EmissionMatrix] (required);
+    features_json:     string;  // serde_json of templates (small, <1 KB)
+}
+
+root_type HmmModel;

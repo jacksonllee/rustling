@@ -41,13 +41,6 @@ def test_invalid_prob_greater_than_one():
         RandomSegmenter(prob=1.5)
 
 
-def test_fit_raises_error():
-    """Test that fit raises NotImplementedError."""
-    segmenter = RandomSegmenter(prob=0.5)
-    with pytest.raises(NotImplementedError, match="No training needed"):
-        segmenter.fit([])
-
-
 def test_empty_input():
     """Test segmentation of empty string."""
     segmenter = RandomSegmenter(prob=0.5)

@@ -1,20 +1,129 @@
 //! Random word segmenter.
 
 use pyo3::prelude::*;
-use rand::Rng;
+use rand::RngExt;
+
+// ---------------------------------------------------------------------------
+// BaseRandomSegmenter
+// ---------------------------------------------------------------------------
+
+/// Core random segmentation behavior with default implementations.
+///
+/// Implementors provide required methods that grant access to internal state.
+/// All segmentation logic is provided as defaults.
+pub trait BaseRandomSegmenter: Sized + Clone {
+    fn prob(&self) -> f64;
+    fn from_prob(prob: f64) -> Self;
+
+    /// Segment the given unsegmented sentences.
+    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
+        sent_strs
+            .into_iter()
+            .map(|sent_str| self.predict_sent(&sent_str))
+            .collect()
+    }
+
+    /// Segment a single unsegmented sentence randomly.
+    fn predict_sent(&self, sent_str: &str) -> Vec<String> {
+        let mut rng = rand::rng();
+        self.predict_sent_seeded(sent_str, &mut rng)
+    }
+
+    /// Segment a single unsegmented sentence with a seeded random generator.
+    fn predict_sent_seeded<R: RngExt>(&self, sent_str: &str, rng: &mut R) -> Vec<String> {
+        let chars: Vec<char> = sent_str.chars().collect();
+        if chars.is_empty() {
+            return vec![];
+        }
+
+        let segment_or_not: Vec<bool> = (0..chars.len().saturating_sub(1))
+            .map(|_| self.prob() > rng.random::<f64>())
+            .collect();
+
+        let boundaries: Vec<usize> = segment_or_not
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &seg)| if seg { Some(i + 1) } else { None })
+            .collect();
+
+        let mut sent = Vec::new();
+        let mut starts = vec![0];
+        starts.extend(&boundaries);
+        let mut ends = boundaries.clone();
+        ends.push(chars.len());
+
+        for (start, end) in starts.iter().zip(ends.iter()) {
+            let word: String = chars[*start..*end].iter().collect();
+            sent.push(word);
+        }
+
+        sent
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure Rust struct
+// ---------------------------------------------------------------------------
 
 /// A random segmenter.
 ///
 /// Segmentation is predicted at random at each potential word
 /// boundary independently for a given probability. No training is required.
-#[pyclass]
-#[derive(Clone)]
+///
+/// For Python, use [`PyRandomSegmenter`].
+#[derive(Clone, Debug)]
 pub struct RandomSegmenter {
     prob: f64,
 }
 
-#[pymethods]
+impl BaseRandomSegmenter for RandomSegmenter {
+    fn prob(&self) -> f64 {
+        self.prob
+    }
+    fn from_prob(prob: f64) -> Self {
+        Self { prob }
+    }
+}
+
 impl RandomSegmenter {
+    /// Create a new random segmenter.
+    ///
+    /// # Arguments
+    ///
+    /// * `prob` - The probability from [0, 1) that segmentation occurs between
+    ///   two symbols.
+    pub fn new(prob: f64) -> Result<Self, String> {
+        if !(0.0..1.0).contains(&prob) {
+            return Err(format!("prob must be from [0, 1): {}", prob));
+        }
+        Ok(Self { prob })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyO3 wrapper
+// ---------------------------------------------------------------------------
+
+/// Python-exposed wrapper. Python users see this as `RandomSegmenter`.
+#[pyclass(name = "RandomSegmenter", from_py_object)]
+#[derive(Clone)]
+pub struct PyRandomSegmenter {
+    pub inner: RandomSegmenter,
+}
+
+impl BaseRandomSegmenter for PyRandomSegmenter {
+    fn prob(&self) -> f64 {
+        self.inner.prob()
+    }
+    fn from_prob(prob: f64) -> Self {
+        Self {
+            inner: RandomSegmenter::from_prob(prob),
+        }
+    }
+}
+
+#[pymethods]
+impl PyRandomSegmenter {
     /// Initialize a random segmenter.
     ///
     /// # Arguments
@@ -27,25 +136,10 @@ impl RandomSegmenter {
     /// * `ValueError` - If prob is outside [0, 1).
     #[new]
     #[pyo3(signature = (*, prob))]
-    pub fn new(prob: f64) -> PyResult<Self> {
-        if !(0.0..1.0).contains(&prob) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "prob must be from [0, 1): {}",
-                prob
-            )));
-        }
-        Ok(Self { prob })
-    }
-
-    /// Training is not required for RandomSegmenter.
-    ///
-    /// # Raises
-    ///
-    /// * `NotImplementedError` - Always, since no training is needed.
-    pub fn fit(&self, _sents: Vec<Vec<String>>) -> PyResult<()> {
-        Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            "No training needed for RandomSegmenter",
-        ))
+    fn new(prob: f64) -> PyResult<Self> {
+        RandomSegmenter::new(prob)
+            .map(|inner| Self { inner })
+            .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// Segment the given unsegmented sentences.
@@ -57,78 +151,8 @@ impl RandomSegmenter {
     /// # Returns
     ///
     /// A list of segmented sentences.
-    pub fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        sent_strs
-            .into_iter()
-            .map(|sent_str| self.predict_sent(&sent_str))
-            .collect()
-    }
-}
-
-impl RandomSegmenter {
-    /// Segment a single unsegmented sentence randomly.
-    fn predict_sent(&self, sent_str: &str) -> Vec<String> {
-        let chars: Vec<char> = sent_str.chars().collect();
-        if chars.is_empty() {
-            return vec![];
-        }
-
-        let mut rng = rand::rng();
-        let segment_or_not: Vec<bool> = (0..chars.len().saturating_sub(1))
-            .map(|_| self.prob > rng.random::<f64>())
-            .collect();
-
-        let boundaries: Vec<usize> = segment_or_not
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &seg)| if seg { Some(i + 1) } else { None })
-            .collect();
-
-        let mut sent = Vec::new();
-        let mut starts = vec![0];
-        starts.extend(&boundaries);
-        let mut ends = boundaries.clone();
-        ends.push(chars.len());
-
-        for (start, end) in starts.iter().zip(ends.iter()) {
-            let word: String = chars[*start..*end].iter().collect();
-            sent.push(word);
-        }
-
-        sent
-    }
-
-    /// Segment a single unsegmented sentence with a seeded random generator.
-    /// This is primarily for testing purposes.
-    #[allow(dead_code)]
-    fn predict_sent_seeded<R: Rng>(&self, sent_str: &str, rng: &mut R) -> Vec<String> {
-        let chars: Vec<char> = sent_str.chars().collect();
-        if chars.is_empty() {
-            return vec![];
-        }
-
-        let segment_or_not: Vec<bool> = (0..chars.len().saturating_sub(1))
-            .map(|_| self.prob > rng.random::<f64>())
-            .collect();
-
-        let boundaries: Vec<usize> = segment_or_not
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &seg)| if seg { Some(i + 1) } else { None })
-            .collect();
-
-        let mut sent = Vec::new();
-        let mut starts = vec![0];
-        starts.extend(&boundaries);
-        let mut ends = boundaries.clone();
-        ends.push(chars.len());
-
-        for (start, end) in starts.iter().zip(ends.iter()) {
-            let word: String = chars[*start..*end].iter().collect();
-            sent.push(word);
-        }
-
-        sent
+    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
+        BaseRandomSegmenter::predict(self, sent_strs)
     }
 }
 
@@ -171,17 +195,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_raises_error() {
-        let segmenter = RandomSegmenter::new(0.5).unwrap();
-        let result = segmenter.fit(vec![]);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_predict_prob_zero_no_segmentation() {
         let segmenter = RandomSegmenter::new(0.0).unwrap();
         let result = segmenter.predict(vec!["hello".to_string()]);
-        // With prob=0.0, no segmentation should occur
         assert_eq!(result, vec![vec!["hello"]]);
     }
 
@@ -196,7 +212,6 @@ mod tests {
     fn test_predict_single_char() {
         let segmenter = RandomSegmenter::new(0.5).unwrap();
         let result = segmenter.predict(vec!["a".to_string()]);
-        // Single char cannot be segmented further
         assert_eq!(result, vec![vec!["a"]]);
     }
 
@@ -210,7 +225,6 @@ mod tests {
         let result1 = segmenter.predict_sent_seeded("hello", &mut rng1);
         let result2 = segmenter.predict_sent_seeded("hello", &mut rng2);
 
-        // Same seed should produce same results
         assert_eq!(result1, result2);
     }
 
@@ -218,7 +232,6 @@ mod tests {
     fn test_predict_unicode() {
         let segmenter = RandomSegmenter::new(0.0).unwrap();
         let result = segmenter.predict(vec!["你好".to_string()]);
-        // With prob=0.0, no segmentation should occur
         assert_eq!(result, vec![vec!["你好"]]);
     }
 

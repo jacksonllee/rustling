@@ -1,10 +1,13 @@
 """Tests for rustling.lm language models."""
 
 import math
+import os
+import pathlib
+import tempfile
 
 import pytest
 
-from rustling.lm import LanguageModel, MLE, Lidstone, Laplace
+from rustling.lm import MLE, Lidstone, Laplace
 
 
 def train_data():
@@ -16,51 +19,6 @@ def train_data():
     ]
 
 
-# --- LanguageModel base tests ---
-
-
-class TestLanguageModel:
-    def test_init_mle(self):
-        model = LanguageModel(order=2, smoothing="mle")
-        assert model.order == 2
-
-    def test_init_lidstone(self):
-        model = LanguageModel(order=2, smoothing="lidstone", gamma=0.5)
-        assert model.order == 2
-
-    def test_init_laplace(self):
-        model = LanguageModel(order=2, smoothing="laplace")
-        assert model.order == 2
-
-    def test_invalid_order(self):
-        with pytest.raises(ValueError, match="order must be >= 1"):
-            LanguageModel(order=0, smoothing="mle")
-
-    def test_invalid_smoothing(self):
-        with pytest.raises(ValueError, match="Unknown smoothing"):
-            LanguageModel(order=2, smoothing="unknown")
-
-    def test_invalid_gamma(self):
-        with pytest.raises(ValueError, match="gamma must be > 0"):
-            LanguageModel(order=2, smoothing="lidstone", gamma=-1.0)
-
-    def test_score_before_fit(self):
-        model = LanguageModel(order=2, smoothing="mle")
-        with pytest.raises(ValueError, match="not been fitted"):
-            model.score("cat", ["the"])
-
-    def test_generate_before_fit(self):
-        model = LanguageModel(order=2, smoothing="mle")
-        with pytest.raises(ValueError, match="not been fitted"):
-            model.generate(num_words=5)
-
-    def test_vocab_size(self):
-        model = LanguageModel(order=2, smoothing="mle")
-        model.fit(train_data())
-        # 5 words (the, cat, sat, dog, ran) + 3 special (<UNK>, <s>, </s>)
-        assert model.vocab_size == 8
-
-
 # --- MLE tests ---
 
 
@@ -69,9 +27,9 @@ class TestMLE:
         model = MLE(order=2)
         assert model.order == 2
 
-    def test_isinstance(self):
-        model = MLE(order=2)
-        assert isinstance(model, LanguageModel)
+    def test_invalid_order(self):
+        with pytest.raises(ValueError, match="order must be >= 1"):
+            MLE(order=0)
 
     def test_bigram_score(self):
         model = MLE(order=2)
@@ -137,6 +95,22 @@ class TestMLE:
         score = model.score("cat", ["the"])
         assert score > 0.0
 
+    def test_score_before_fit(self):
+        model = MLE(order=2)
+        with pytest.raises(ValueError, match="not been fitted"):
+            model.score("cat", ["the"])
+
+    def test_generate_before_fit(self):
+        model = MLE(order=2)
+        with pytest.raises(ValueError, match="not been fitted"):
+            model.generate(num_words=5)
+
+    def test_vocab_size(self):
+        model = MLE(order=2)
+        model.fit(train_data())
+        # 5 words (the, cat, sat, dog, ran) + 3 special (<UNK>, <s>, </s>)
+        assert model.vocab_size == 8
+
 
 # --- Lidstone tests ---
 
@@ -146,9 +120,9 @@ class TestLidstone:
         model = Lidstone(order=2, gamma=0.5)
         assert model.order == 2
 
-    def test_isinstance(self):
+    def test_gamma_property(self):
         model = Lidstone(order=2, gamma=0.5)
-        assert isinstance(model, LanguageModel)
+        assert model.gamma == 0.5
 
     def test_invalid_gamma_zero(self):
         with pytest.raises(ValueError, match="gamma must be > 0"):
@@ -187,10 +161,6 @@ class TestLaplace:
     def test_init(self):
         model = Laplace(order=2)
         assert model.order == 2
-
-    def test_isinstance(self):
-        model = Laplace(order=2)
-        assert isinstance(model, LanguageModel)
 
     def test_matches_lidstone_gamma_one(self):
         """Laplace should give same results as Lidstone(gamma=1)."""
@@ -255,3 +225,86 @@ class TestGenerate:
         # Very likely to differ with different seeds and Laplace smoothing
         # (allows more diverse output)
         assert result1 != result2
+
+
+# --- Save/Load tests ---
+
+
+class TestSaveLoad:
+    def test_save_and_load_mle(self):
+        model = MLE(order=2)
+        model.fit(train_data())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "model.json.gz")
+            model.save(path)
+
+            loaded = MLE(order=2)
+            loaded.load(path)
+
+            s1 = model.score("cat", ["the"])
+            s2 = loaded.score("cat", ["the"])
+            assert abs(s1 - s2) < 1e-9
+
+    def test_save_and_load_lidstone(self):
+        model = Lidstone(order=2, gamma=0.5)
+        model.fit(train_data())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "model.json.gz")
+            model.save(path)
+
+            loaded = Lidstone(order=2, gamma=0.5)
+            loaded.load(path)
+
+            s1 = model.score("cat", ["the"])
+            s2 = loaded.score("cat", ["the"])
+            assert abs(s1 - s2) < 1e-9
+
+    def test_save_and_load_laplace(self):
+        model = Laplace(order=2)
+        model.fit(train_data())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "model.json.gz")
+            model.save(path)
+
+            loaded = Laplace(order=2)
+            loaded.load(path)
+
+            s1 = model.score("cat", ["the"])
+            s2 = loaded.score("cat", ["the"])
+            assert abs(s1 - s2) < 1e-9
+
+    def test_save_and_load_with_pathlib(self):
+        """Test that save/load accept pathlib.Path (os.PathLike)."""
+        model = MLE(order=2)
+        model.fit(train_data())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "model.json.gz"
+            model.save(path)
+
+            loaded = MLE(order=2)
+            loaded.load(path)
+
+            s1 = model.score("cat", ["the"])
+            s2 = loaded.score("cat", ["the"])
+            assert abs(s1 - s2) < 1e-9
+
+    def test_load_nonexistent_file(self):
+        model = MLE(order=2)
+        with pytest.raises(FileNotFoundError, match="Can't locate"):
+            model.load("/nonexistent/path/model.json.gz")
+
+    def test_load_smoothing_mismatch(self):
+        model = MLE(order=2)
+        model.fit(train_data())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "model.json.gz")
+            model.save(path)
+
+            wrong = Lidstone(order=2, gamma=0.5)
+            with pytest.raises(EnvironmentError, match="Smoothing type mismatch"):
+                wrong.load(path)

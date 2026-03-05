@@ -1,18 +1,29 @@
 Rustling
 ========
 
+.. meta::
+   :description:
+      Rustling: A Blazingly Fast Libray for Computational Linguistics
+   :keywords: rustling, computational linguistics, linguistics,
+      natural language processing, nlp, text processing,
+      word segmentation, part-of-speech tagging, language models,
+      ngrams, childes, talkbank, chat,
+      averaged perceptron, hidden markov model, longest string matching,
+      rust, python
+
 Rustling is a blazingly fast library for computational linguistics.
 It is written in Rust, with Python bindings.
 
 .. toctree::
    :maxdepth: 1
 
-   lm
-   ngram
-   wordseg
-   tagging
-   chat
-   api
+   N-grams <ngram>
+   Language Models <lm>
+   HMM <hmm>
+   Word Segmentation <wordseg>
+   POS Tagging <perceptron_pos_tagger>
+   CHAT Parsing <chat>
+   API Reference <api>
 
 
 Installation
@@ -26,7 +37,8 @@ Installation
 Performance
 -----------
 
-Benchmarked against pure Python implementations from NLTK, wordseg (v0.0.5), and pylangacq (v0.19.1).
+Benchmarked against Python implementations from NLTK, wordseg (v0.0.5),
+pylangacq (v0.19.1), and hmmlearn (v0.3.3).
 See `benchmarks/ <https://github.com/jacksonllee/rustling/tree/main/benchmarks>`_
 for full details and reproduction scripts.
 
@@ -42,53 +54,53 @@ for full details and reproduction scripts.
      - Fit
      - **10x**
      - NLTK
-   * -
+   * - 
      - Score
-     - **2x**
+     - **1.9x**
      - NLTK
-   * -
+   * - 
      - Generate
-     - **80–112x**
+     - **106--114x**
      - NLTK
    * - **Word Segmentation**
      - LongestStringMatching
      - **9x**
      - wordseg
-   * -
-     - RandomSegmenter
-     - **1.1x**
-     - wordseg
    * - **POS Tagging**
      - Training
      - **5x**
      - NLTK
-   * -
+   * - 
      - Tagging
-     - **7x**
+     - **18x**
      - NLTK
+   * - **HMM**
+     - Fit
+     - **13x**
+     - hmmlearn
+   * - 
+     - Predict
+     - **0.9x**
+     - hmmlearn
+   * - 
+     - Score
+     - **5x**
+     - hmmlearn
    * - **CHAT Parsing**
-     - from_dir
-     - **55x**
+     - Reading from a ZIP archive
+     - **43x**
      - pylangacq
    * -
-     - from_zip
-     - **48x**
+     - Reading from strings
+     - **70x**
      - pylangacq
    * -
-     - from_files
-     - **63x**
-     - pylangacq
-   * -
-     - from_strs
-     - **116x**
-     - pylangacq
-   * -
-     - words()
-     - **3x**
-     - pylangacq
-   * -
-     - utterances()
+     - Parsing utterances
      - **15x**
+     - pylangacq
+   * -
+     - Parsing tokens
+     - **9x**
      - pylangacq
 
 

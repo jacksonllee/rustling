@@ -1,10 +1,13 @@
-"""Part-of-speech tagging."""
+"""Averaged perceptron part-of-speech tagging."""
 
 from __future__ import annotations
 
+import os
 from typing import Sequence
 
-class AveragedPerceptronTagger:
+from rustling.seq_feature import SeqFeatureTemplate
+
+class AveragedPerceptron:
     """A part-of-speech tagger using an averaged perceptron model.
 
     This is a modified version based on the textblob-aptagger codebase
@@ -17,6 +20,8 @@ class AveragedPerceptronTagger:
         frequency_threshold: int = 10,
         ambiguity_threshold: float = 0.95,
         n_iter: int = 5,
+        random_seed: int | None = None,
+        features: Sequence[SeqFeatureTemplate] | None = None,
     ) -> None:
         """Initialize a part-of-speech tagger.
 
@@ -35,44 +40,56 @@ class AveragedPerceptronTagger:
             n_iter: Number of times the training phase iterates through
                 the data. At each new iteration, the data is randomly
                 shuffled.
+            random_seed: Random seed for reproducible shuffling during
+                training. If ``None``, a non-deterministic random number
+                generator is used.
+            features: Optional list of feature templates created with
+                ``seq_obs()`` and ``seq_label()``. If ``None``, uses
+                default features.
         """
         ...
 
-    def predict(self, words: Sequence[str]) -> list[str]:
-        """Predict tags for the words.
+    def predict(self, sequences: Sequence[Sequence[str]]) -> list[list[str]]:
+        """Predict tags for the sequences.
 
         Args:
-            words: A segmented sentence or phrase, where each word is
-                a string.
+            sequences: A list of segmented sentences, where each sentence
+                is a sequence of words.
 
         Returns:
-            The list of predicted tags.
+            A list of tag sequences, one per input sentence.
         """
         ...
 
-    def fit(self, tagged_sents: Sequence[Sequence[tuple[str, str]]]) -> None:
+    def fit(
+        self,
+        sequences: Sequence[Sequence[str]],
+        tags: Sequence[Sequence[str]],
+    ) -> None:
         """Fit a model.
 
         Args:
-            tagged_sents: A list of segmented and tagged sentences for
-                training. Each sentence is a sequence of (word, tag) tuples.
+            sequences: A list of segmented sentences for training, where
+                each sentence is a sequence of words.
+            tags: A list of tag sequences corresponding to the sentences.
         """
         ...
 
-    def save(self, path: str) -> None:
-        """Save the model to a JSON file.
+    def save(self, path: str | os.PathLike[str]) -> None:
+        """Save the model to a zstd-compressed FlatBuffers binary.
 
         Args:
-            path: The path where the model will be saved as a JSON file.
+            path: The path where the model will be saved.
+                The file extension name ``.fb.zst`` is recommended.
         """
         ...
 
-    def load(self, path: str) -> None:
-        """Load a model from a JSON file.
+    def load(self, path: str | os.PathLike[str]) -> None:
+        """Load a model.
 
         Args:
-            path: The path where the model, stored as a JSON file,
-                is located.
+            path: The path where the model, stored as a zstd-compressed FlatBuffers
+                binary, is located.
 
         Raises:
             FileNotFoundError: If the file at the given path does not

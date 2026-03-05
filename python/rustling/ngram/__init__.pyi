@@ -114,7 +114,7 @@ class Ngrams:
         ...
 
     def to_counter(self, *, order: int | None = None) -> Counter[tuple[str, ...]]:
-        """Convert to a ``collections.Counter``.
+        """Convert to a :class:`collections.Counter`.
 
         Args:
             order: If specified, only include n-grams of this specific order.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Literal, Sequence, overload
 
@@ -305,7 +306,7 @@ class CHAT:
     @classmethod
     def from_files(
         cls,
-        paths: Sequence[str],
+        paths: Sequence[str | os.PathLike[str]],
         *,
         parallel: bool = True,
         strict: bool = True,
@@ -332,7 +333,7 @@ class CHAT:
     @classmethod
     def from_dir(
         cls,
-        path: str,
+        path: str | os.PathLike[str],
         *,
         match: str | None = None,
         extension: str = ".cha",
@@ -363,7 +364,7 @@ class CHAT:
     @classmethod
     def from_zip(
         cls,
-        path: str,
+        path: str | os.PathLike[str],
         *,
         match: str | None = None,
         extension: str = ".cha",
@@ -388,6 +389,27 @@ class CHAT:
         Raises:
             ValueError: If strict is True and mor/word misalignment
                 is found.
+        """
+        ...
+
+    @classmethod
+    def from_utterances(
+        cls,
+        utterances: Sequence[Utterance],
+    ) -> CHAT:
+        """Construct a CHAT reader from a list of utterances.
+
+        Creates a new reader containing a single virtual file with the given
+        utterances. Useful for splitting a reader into sub-readers based on
+        utterance boundaries. Raw lines are synthesized from each
+        utterance's ``tiers`` data, so ``to_strs()`` and ``to_chat()``
+        produce valid CHAT output.
+
+        Args:
+            utterances: Utterance objects to include.
+
+        Returns:
+            A new CHAT reader containing the given utterances.
         """
         ...
 
@@ -726,35 +748,35 @@ class CHAT:
         """
         ...
 
-    def append(self, reader: CHAT) -> None:
+    def append(self, other: CHAT, /) -> None:
         """Append data from another CHAT reader.
 
         Args:
-            reader: A CHAT reader whose data to append.
+            other: A CHAT reader whose data to append.
         """
         ...
 
-    def append_left(self, reader: CHAT) -> None:
+    def append_left(self, other: CHAT, /) -> None:
         """Left-append data from another CHAT reader.
 
         Args:
-            reader: A CHAT reader whose data to prepend.
+            other: A CHAT reader whose data to prepend.
         """
         ...
 
-    def extend(self, readers: Sequence[CHAT]) -> None:
+    def extend(self, others: Sequence[CHAT], /) -> None:
         """Extend data from multiple CHAT readers.
 
         Args:
-            readers: CHAT readers whose data to append.
+            others: CHAT readers whose data to append.
         """
         ...
 
-    def extend_left(self, readers: Sequence[CHAT]) -> None:
+    def extend_left(self, others: Sequence[CHAT], /) -> None:
         """Left-extend data from multiple CHAT readers.
 
         Args:
-            readers: CHAT readers whose data to prepend.
+            others: CHAT readers whose data to prepend.
         """
         ...
 
@@ -794,7 +816,7 @@ class CHAT:
 
     def to_chat(
         self,
-        path: str,
+        path: str | os.PathLike[str],
         *,
         is_dir: bool = False,
         filenames: Sequence[str] | None = None,
@@ -830,6 +852,7 @@ class CHAT:
     @overload
     def __getitem__(self, index: slice) -> CHAT: ...
     def __iter__(self) -> Iterator[CHAT]: ...
+    def __bool__(self) -> bool: ...
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...

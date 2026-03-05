@@ -4,7 +4,7 @@ accessible-pygments==0.0.5
     # via pydata-sphinx-theme
 alabaster==1.0.0
     # via sphinx
-astroid==4.0.4
+astroid==4.1.0
     # via sphinx-autoapi
 babel==2.18.0
     # via
@@ -54,7 +54,10 @@ sphinx==9.1.0
     #   rustling (pyproject.toml:docs)
     #   pydata-sphinx-theme
     #   sphinx-autoapi
-sphinx-autoapi==3.6.1
+    #   sphinx-copybutton
+sphinx-autoapi==3.7.0
+    # via rustling (pyproject.toml:docs)
+sphinx-copybutton==0.5.2
     # via rustling (pyproject.toml:docs)
 sphinxcontrib-applehelp==2.0.0
     # via sphinx

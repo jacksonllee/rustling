@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.9"]
+requires = ["maturin >= 1.9"]
 build-backend = "maturin"
 
 [project]
@@ -7,7 +7,7 @@ name = "rustling"
 description = "A blazingly fast library for computational linguistics"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT License" }
+license = "MIT"
 authors = [ { name = "Jackson L. Lee", email = "jacksonlunlee@gmail.com" } ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -15,7 +15,6 @@ classifiers = [
     "Intended Audience :: Education",
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Rust",
     "Programming Language :: Python",
@@ -36,7 +35,13 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
     "Topic :: Text Processing :: Linguistic",
 ]
-dynamic = ["version"]
+dynamic = ["version", "keywords"]
+
+[project.urls]
+"Python Documentation" = "https://rustling.readthedocs.io"
+"Rust Documentation" = "https://docs.rs/rustling"
+Source = "https://github.com/jacksonllee/rustling"
+Changelog = "https://github.com/jacksonllee/rustling/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 features = ["extension-module", "parallel"]
@@ -45,8 +50,11 @@ module-name = "rustling._lib_name"
 python-packages = ["rustling"]
 
 [tool.pytest.ini_options]
-addopts = "-vv --strict-markers"
+addopts = "-vv --strict-markers -m 'not benchmark'"
 testpaths = ["python/tests"]
+markers = [
+    "benchmark: benchmark regression tests (deselected by default, run with: pytest -m benchmark)",
+]
 
 [tool.black]
 line-length = 88
@@ -70,10 +78,13 @@ docs = [
     "sphinx >= 8.1.3",
     "pydata-sphinx-theme >= 0.16.1",
     "sphinx-autoapi >= 3.4.0",
+    "sphinx-copybutton >= 0.5.2",
 ]
 benchmarks = [
     "wordseg >= 0.0.4",
     "pycantonese @ git+https://github.com/jacksonllee/pycantonese.git@3485a6c78495d1415d5228b2c94dd1a37c58ed9a",
     "nltk >= 3.8",
     "pylangacq @ git+https://github.com/jacksonllee/pylangacq.git@5161b686296d905d5226c9a4e126834ddbf669f5",
+    "hmmlearn == 0.3.3",
+    "numpy",
 ]

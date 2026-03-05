@@ -89,6 +89,11 @@ impl<K: Eq + Hash + Clone, V> TrieNode<K, V> {
     pub fn terminal(&self) -> Option<&V> {
         self.terminal.as_ref()
     }
+
+    /// Get the child node for the given key, if present.
+    pub fn get_child(&self, key: &K) -> Option<&TrieNode<K, V>> {
+        self.children.get(key)
+    }
 }
 
 /// A trie (prefix tree) for efficient sequence operations.
@@ -260,6 +265,28 @@ impl<K: Eq + Hash + Clone> Trie<K, ()> {
         longest
     }
 
+    /// Collect all terminal sequences in the trie.
+    ///
+    /// Returns a vector of all sequences that were explicitly inserted.
+    /// The order of entries is not guaranteed.
+    pub fn all_sequences(&self) -> Vec<Vec<K>> {
+        let mut result = Vec::with_capacity(self.len());
+        let mut prefix = Vec::new();
+        Self::collect_sequences(&self.root, &mut prefix, &mut result);
+        result
+    }
+
+    fn collect_sequences(node: &TrieNode<K, ()>, prefix: &mut Vec<K>, result: &mut Vec<Vec<K>>) {
+        if node.terminal.is_some() {
+            result.push(prefix.clone());
+        }
+        for (key, child) in &node.children {
+            prefix.push(key.clone());
+            Self::collect_sequences(child, prefix, result);
+            prefix.pop();
+        }
+    }
+
     /// Find the longest matching sequence from an iterator.
     ///
     /// This is a convenience method that collects the iterator into a Vec internally.
@@ -334,6 +361,26 @@ impl<K: Eq + Hash + Clone> CountTrie<K> {
                 inner.len += 1;
             }
         }
+    }
+
+    /// Set the count for the given sequence directly.
+    ///
+    /// Creates intermediate nodes as needed. Overwrites any existing count.
+    /// This is more efficient than calling `increment` in a loop when
+    /// loading counts from saved data.
+    pub fn insert_count<I>(&mut self, sequence: I, count: u64)
+    where
+        I: IntoIterator<Item = K>,
+    {
+        let inner = &mut self.inner;
+        let mut node = &mut inner.root;
+        for element in sequence {
+            node = node.children.entry(element).or_default();
+        }
+        if node.terminal.is_none() {
+            inner.len += 1;
+        }
+        node.terminal = Some(count);
     }
 
     /// Get the count for the given sequence.

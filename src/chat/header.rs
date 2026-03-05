@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 // ---------------------------------------------------------------------------
 
 /// Age in the CHAT format: years;months.days (e.g., "2;10.05").
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Age {
     #[pyo3(get)]
@@ -66,7 +66,7 @@ impl Age {
 }
 
 /// A single participant from @Participants + @ID fields merged.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Participant {
     #[pyo3(get)]
@@ -134,7 +134,7 @@ pub(crate) struct Media {
 // ---------------------------------------------------------------------------
 
 /// All file-level (non-changeable) headers from a CHAT file.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Headers {
     // Hidden
@@ -188,7 +188,7 @@ pub struct Headers {
 #[pymethods]
 impl Headers {
     #[getter]
-    fn media(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn media(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         match &self.media_data {
             None => Ok(None),
             Some(m) => {
@@ -196,7 +196,7 @@ impl Headers {
                 dict.set_item("filename", &m.filename)?;
                 dict.set_item("format", &m.format)?;
                 dict.set_item("status", &m.status)?;
-                Ok(Some(dict.into()))
+                Ok(Some(dict.into_any().unbind()))
             }
         }
     }
@@ -252,7 +252,7 @@ impl Headers {
 // ---------------------------------------------------------------------------
 
 /// A changeable header that can appear mid-file in CHAT transcripts.
-#[pyclass(eq, hash)]
+#[pyclass(eq, hash, from_py_object)]
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub enum ChangeableHeader {
     Activities { value: String },

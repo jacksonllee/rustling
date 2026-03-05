@@ -568,6 +568,20 @@ def run_benchmarks(
         for key, vals in speedups_by_op.items()
     }
 
+    # Compute speedups grouped by operation (averaged across models)
+    speedups: dict[str, float | dict[str, float]] = {}
+    for op in ["fit", "score", "generate"]:
+        op_values = [
+            v for k, v_list in speedups_by_op.items() if op in k.lower() for v in v_list
+        ]
+        if op_values:
+            display = op.capitalize()
+            if op == "generate":
+                speedups[display] = {"min": min(op_values), "max": max(op_values)}
+            else:
+                speedups[display] = statistics.mean(op_values)
+    all_results["speedups"] = speedups
+
     return all_results
 
 

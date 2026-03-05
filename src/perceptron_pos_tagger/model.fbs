@@ -1,0 +1,25 @@
+namespace rustling.perceptron_fbs;
+
+// Weight for one (feature, class) pair.
+// Stored as f32 on disk; widened to f64 on load.
+table ClassWeight {
+    class_name: string (required);
+    weight:     float;
+}
+
+// All class weights for a single feature key.
+table FeatureEntry {
+    feature_key:   string (required);
+    class_weights: [ClassWeight] (required);
+}
+
+// tagdict stored as parallel arrays for compactness.
+table PerceptronModel {
+    feature_entries:  [FeatureEntry] (required);
+    classes:          [string]       (required);
+    tagdict_keys:     [string]       (required);
+    tagdict_values:   [string]       (required);
+    features_json:    string;
+}
+
+root_type PerceptronModel;

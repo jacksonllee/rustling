@@ -1,0 +1,106 @@
+# Stubtest allowlist for PyO3-related structural differences.
+#
+# These entries are inherent to how PyO3 exposes Rust types to Python
+# and cannot be fixed without hurting stub usability for end users.
+#
+# Categories:
+# 1. "cannot be subclassed" / "disjoint base" — PyO3 classes are final at
+#    runtime, but stubs omit @final for better IDE experience.
+# 2. __init__ vs __new__ — PyO3 #[new] maps to __new__, but stubs use
+#    __init__ which is the standard convention for user-facing documentation.
+# 3. Default value Ellipsis — PyO3 shows Some(...) defaults as Ellipsis at
+#    runtime; stubs document the actual default values.
+
+# chat module
+rustling.chat.Age
+rustling.chat.CHAT
+rustling.chat.CHAT.ipsyn
+rustling.chat.CHAT.mlu
+rustling.chat.CHAT.mlum
+rustling.chat.CHAT.mluw
+rustling.chat.CHAT.ttr
+rustling.chat.ChangeableHeader
+rustling.chat.ChangeableHeader.Activities
+rustling.chat.ChangeableHeader.Activities.__init__
+rustling.chat.ChangeableHeader.Activities.__new__
+rustling.chat.ChangeableHeader.Bck
+rustling.chat.ChangeableHeader.Bck.__init__
+rustling.chat.ChangeableHeader.Bck.__new__
+rustling.chat.ChangeableHeader.Bg
+rustling.chat.ChangeableHeader.Bg.__init__
+rustling.chat.ChangeableHeader.Bg.__new__
+rustling.chat.ChangeableHeader.Blank
+rustling.chat.ChangeableHeader.Comment
+rustling.chat.ChangeableHeader.Comment.__init__
+rustling.chat.ChangeableHeader.Comment.__new__
+rustling.chat.ChangeableHeader.Date
+rustling.chat.ChangeableHeader.Date.__init__
+rustling.chat.ChangeableHeader.Date.__new__
+rustling.chat.ChangeableHeader.Eg
+rustling.chat.ChangeableHeader.Eg.__init__
+rustling.chat.ChangeableHeader.Eg.__new__
+rustling.chat.ChangeableHeader.G
+rustling.chat.ChangeableHeader.G.__init__
+rustling.chat.ChangeableHeader.G.__new__
+rustling.chat.ChangeableHeader.NewEpisode
+rustling.chat.ChangeableHeader.Page
+rustling.chat.ChangeableHeader.Page.__init__
+rustling.chat.ChangeableHeader.Page.__new__
+rustling.chat.ChangeableHeader.Situation
+rustling.chat.ChangeableHeader.Situation.__init__
+rustling.chat.ChangeableHeader.Situation.__new__
+rustling.chat.Gra
+rustling.chat.Gra.__init__
+rustling.chat.Gra.__new__
+rustling.chat.Headers
+rustling.chat.Participant
+rustling.chat.Token
+rustling.chat.Token.__init__
+rustling.chat.Token.__new__
+rustling.chat.Utterance
+rustling.chat.Utterance.__init__
+rustling.chat.Utterance.__new__
+rustling.chat.Utterances
+
+# hmm module
+rustling.hmm.HiddenMarkovModel
+rustling.hmm.HiddenMarkovModel.__init__
+rustling.hmm.HiddenMarkovModel.__new__
+
+# lm module
+rustling.lm.Laplace
+rustling.lm.Laplace.__init__
+rustling.lm.Laplace.__new__
+rustling.lm.Lidstone
+rustling.lm.Lidstone.__init__
+rustling.lm.Lidstone.__new__
+rustling.lm.MLE
+rustling.lm.MLE.__init__
+rustling.lm.MLE.__new__
+
+# ngram module
+rustling.ngram.Ngrams
+rustling.ngram.Ngrams.__init__
+rustling.ngram.Ngrams.__new__
+
+# perceptron_pos_tagger module
+rustling.perceptron_pos_tagger.AveragedPerceptron
+rustling.perceptron_pos_tagger.AveragedPerceptron.__init__
+rustling.perceptron_pos_tagger.AveragedPerceptron.__new__
+
+# seq_feature module
+rustling.seq_feature.SeqFeatureTemplate
+
+# wordseg module
+rustling.wordseg.DAGHMMSegmenter
+rustling.wordseg.DAGHMMSegmenter.__init__
+rustling.wordseg.DAGHMMSegmenter.__new__
+rustling.wordseg.HiddenMarkovModelSegmenter
+rustling.wordseg.HiddenMarkovModelSegmenter.__init__
+rustling.wordseg.HiddenMarkovModelSegmenter.__new__
+rustling.wordseg.LongestStringMatching
+rustling.wordseg.LongestStringMatching.__init__
+rustling.wordseg.LongestStringMatching.__new__
+rustling.wordseg.RandomSegmenter
+rustling.wordseg.RandomSegmenter.__init__
+rustling.wordseg.RandomSegmenter.__new__

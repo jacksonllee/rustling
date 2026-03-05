@@ -1,0 +1,8 @@
+namespace rustling.lsm_fbs;
+
+table LsmModel {
+    max_word_length: uint32;
+    words:           [string] (required);
+}
+
+root_type LsmModel;

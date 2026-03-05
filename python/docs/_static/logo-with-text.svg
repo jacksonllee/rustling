@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 300" width="1300" height="300">
+  <defs>
+    <clipPath id="leafClip">
+      <path d="M 300 0 A 300 300 0 0 1 0 300 A 300 300 0 0 1 300 0 Z"/>
+    </clipPath>
+  </defs>
+  <g transform="rotate(90, 150, 150)">
+    <path d="M 300 0 A 300 300 0 0 1 0 300 A 300 300 0 0 1 300 0 Z" fill="#de7350"/>
+  </g>
+  <path d="M 300 0 A 300 300 0 0 1 0 300 A 300 300 0 0 1 300 0 Z" fill="#D34516"/>
+  <g clip-path="url(#leafClip)">
+    <path d="M 40.2 150 C 51.0 150, 60 134, 70 150 Q 75 169, 81 150 Q 87 110, 93 150 Q 98 190, 104 150 Q 110 58, 116 150 Q 121 242, 127 150 Q 133 -0, 139 150 Q 144 300, 150 150 Q 156 -0, 161 150 Q 167 300, 173 150 Q 179 58, 184 150 Q 190 242, 196 150 Q 202 110, 207 150 Q 213 190, 219 150 Q 225 131, 230 150 C 240 166, 249.0 150, 259.8 150" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="360" y="150" font-family="Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="200" font-weight="400" fill="#000000" letter-spacing="-4" dominant-baseline="central">Rustling</text>
+</svg>

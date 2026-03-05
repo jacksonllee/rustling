@@ -6,7 +6,14 @@ segmented sentences and used to predict segmentation of unsegmented text.
 
 from rustling._lib_name import wordseg as _wordseg
 
+DAGHMMSegmenter = _wordseg.DAGHMMSegmenter
+HiddenMarkovModelSegmenter = _wordseg.HiddenMarkovModelSegmenter
 LongestStringMatching = _wordseg.LongestStringMatching
 RandomSegmenter = _wordseg.RandomSegmenter
 
-__all__ = ["LongestStringMatching", "RandomSegmenter"]
+__all__ = [
+    "DAGHMMSegmenter",
+    "HiddenMarkovModelSegmenter",
+    "LongestStringMatching",
+    "RandomSegmenter",
+]

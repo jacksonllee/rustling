@@ -2,7 +2,7 @@
 
 All benchmarks use the HKCanCor (Hong Kong Cantonese Corpus) via pycantonese
 as a unified data source. This module loads the corpus and converts it to the
-formats needed by each benchmark category (tagging, wordseg, lm).
+formats needed by each benchmark category (tagging, wordseg, lm, hmm).
 """
 
 from __future__ import annotations
@@ -115,3 +115,28 @@ def lm_data(
     """
     split_idx = int(len(tagged_sents) * train_ratio)
     return [[word for word, tag in sent] for sent in tagged_sents[:split_idx]]
+
+
+def hmm_data(
+    tagged_sents: list[list[tuple[str, str]]],
+    train_ratio: float = 0.8,
+) -> tuple[list[list[str]], list[list[str]]]:
+    """Convert HKCanCor data to HMM format (word sequences only).
+
+    Parameters
+    ----------
+    tagged_sents : list[list[tuple[str, str]]]
+        Tagged sentences from load_hkcancor().
+    train_ratio : float, default=0.8
+        Fraction of data to use for training.
+
+    Returns
+    -------
+    tuple[list[list[str]], list[list[str]]]
+        (training_sequences, test_sequences)
+        Both are lists of word-only sequences (tags stripped).
+    """
+    split_idx = int(len(tagged_sents) * train_ratio)
+    training = [[word for word, tag in sent] for sent in tagged_sents[:split_idx]]
+    test = [[word for word, tag in sent] for sent in tagged_sents[split_idx:]]
+    return training, test

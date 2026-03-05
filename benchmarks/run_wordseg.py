@@ -107,42 +107,6 @@ def benchmark_longest_string_matching(
     return results[0], results[1]
 
 
-def benchmark_random_segmenter(
-    rustling_cls: type | None,
-    wordseg_cls: type | None,
-    test_sentences: list[str],
-    prob: float = 0.5,
-    iterations: int = 5,
-) -> tuple[BenchmarkResult | None, BenchmarkResult | None]:
-    """Benchmark RandomSegmenter implementations."""
-    results = []
-
-    for name, cls in [("rustling", rustling_cls), ("wordseg", wordseg_cls)]:
-        if cls is None:
-            results.append(None)
-            continue
-
-        model = cls(prob=prob)
-
-        def predict() -> None:
-            result = model.predict(test_sentences)
-            list(result)
-
-        total_time = time_function(predict, iterations=iterations)
-
-        results.append(
-            BenchmarkResult(
-                name="RandomSegmenter",
-                implementation=name,
-                num_sentences=len(test_sentences),
-                time_seconds=total_time,
-                iterations=iterations,
-            )
-        )
-
-    return results[0], results[1]
-
-
 def print_result(result: BenchmarkResult) -> None:
     """Print a benchmark result."""
     print(f"  {result.implementation}:")
@@ -183,16 +147,12 @@ def run_benchmarks(
     """
     # Try to import both implementations
     rustling_lsm = None
-    rustling_rs = None
     wordseg_lsm = None
-    wordseg_rs = None
 
     try:
         from rustling.wordseg import LongestStringMatching as RustlingLSM
-        from rustling.wordseg import RandomSegmenter as RustlingRS
 
         rustling_lsm = RustlingLSM
-        rustling_rs = RustlingRS
         if verbose:
             print("✓ rustling.wordseg loaded successfully")
     except ImportError as e:
@@ -201,10 +161,8 @@ def run_benchmarks(
 
     try:
         from wordseg import LongestStringMatching as WordsegLSM
-        from wordseg import RandomSegmenter as WordsegRS
 
         wordseg_lsm = WordsegLSM
-        wordseg_rs = WordsegRS
         if verbose:
             print("✓ wordseg (pure Python) loaded successfully")
     except ImportError as e:
@@ -267,28 +225,15 @@ def run_benchmarks(
         "wordseg": lsm_wordseg.__dict__ if lsm_wordseg else None,
     }
 
-    # Benchmark RandomSegmenter
-    if verbose:
-        print("\n📊 RandomSegmenter:")
-
-    rs_rustling, rs_wordseg = benchmark_random_segmenter(
-        rustling_rs,
-        wordseg_rs,
-        test_sentences,
-        iterations=iterations,
-    )
-
-    if rs_rustling and verbose:
-        print_result(rs_rustling)
-    if rs_wordseg and verbose:
-        print_result(rs_wordseg)
-    if rs_rustling and rs_wordseg and verbose:
-        print_comparison(rs_rustling, rs_wordseg)
-
-    all_results["benchmarks"]["RandomSegmenter"] = {
-        "rustling": rs_rustling.__dict__ if rs_rustling else None,
-        "wordseg": rs_wordseg.__dict__ if rs_wordseg else None,
-    }
+    # Compute speedups
+    speedups: dict[str, float] = {}
+    for algo in ["LongestStringMatching"]:
+        bench = all_results["benchmarks"].get(algo, {})
+        r = bench.get("rustling")
+        w = bench.get("wordseg")
+        if r and w and r["time_seconds"] > 0:
+            speedups[algo] = w["time_seconds"] / r["time_seconds"]
+    all_results["speedups"] = speedups
 
     return all_results
 

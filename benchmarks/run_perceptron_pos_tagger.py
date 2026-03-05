@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Benchmark rustling.tagging vs NLTK PerceptronTagger.
+"""Benchmark rustling.perceptron_pos_tagger vs NLTK PerceptronTagger.
 
 Compares training and tagging speed using HKCanCor corpus data.
 
 Usage:
-    python benchmarks/run_tagger.py
-    python benchmarks/run_tagger.py --quick
-    python benchmarks/run_tagger.py --export results.json
+    python benchmarks/run_perceptron_pos_tagger.py
+    python benchmarks/run_perceptron_pos_tagger.py --quick
+    python benchmarks/run_perceptron_pos_tagger.py --export results.json
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ from common.data import load_hkcancor, tagging_data  # noqa: E402
 
 
 def try_import_rustling_tagger() -> dict[str, Any]:
-    """Try to import Rustling's AveragedPerceptronTagger."""
+    """Try to import Rustling's AveragedPerceptron."""
     try:
-        from rustling.tagging import AveragedPerceptronTagger
+        from rustling.perceptron_pos_tagger import AveragedPerceptron
 
-        return {"available": True, "class": AveragedPerceptronTagger}
+        return {"available": True, "class": AveragedPerceptron}
     except ImportError as e:
         return {"available": False, "error": str(e)}
 
@@ -58,12 +58,14 @@ def benchmark_rustling_training(
     float
         Average training time in seconds.
     """
+    sequences = [[word for word, tag in sent] for sent in training_data]
+    tags = [[tag for word, tag in sent] for sent in training_data]
     times = []
     for _ in range(iterations):
         gc.collect()
         model = tagger_class()
         start = time.perf_counter()
-        model.fit(training_data)
+        model.fit(sequences, tags)
         times.append(time.perf_counter() - start)
     return statistics.mean(times)
 
@@ -84,8 +86,7 @@ def benchmark_rustling_tagging(
     for _ in range(iterations):
         gc.collect()
         start = time.perf_counter()
-        for sent in test_sentences:
-            model.predict(sent)
+        model.predict(test_sentences)
         times.append(time.perf_counter() - start)
     return statistics.mean(times)
 
@@ -157,9 +158,10 @@ def run_benchmarks(
 
     if verbose:
         if rustling_info["available"]:
-            print("✓ rustling.tagging loaded successfully")
+            print("✓ rustling.perceptron_pos_tagger loaded successfully")
         else:
-            print(f"✗ rustling.tagging not available: {rustling_info.get('error', '')}")
+            error = rustling_info.get("error", "")
+            print(f"✗ rustling.perceptron_pos_tagger not available: {error}")
         if nltk_info["available"]:
             print("✓ NLTK PerceptronTagger loaded successfully")
         else:
@@ -209,7 +211,7 @@ def run_benchmarks(
         )
         if verbose:
             print(
-                f"\n  rustling.tagging.AveragedPerceptronTagger:"
+                f"\n  rustling.perceptron_pos_tagger.AveragedPerceptron:"
                 f"\n    Training time: {rustling_train_time:.4f}s"
             )
 
@@ -239,14 +241,16 @@ def run_benchmarks(
     rustling_tag_time = None
     if rustling_info["available"]:
         model = rustling_info["class"]()
-        model.fit(training_data)
+        sequences = [[word for word, tag in sent] for sent in training_data]
+        tags = [[tag for word, tag in sent] for sent in training_data]
+        model.fit(sequences, tags)
         rustling_tag_time = benchmark_rustling_tagging(
             model, test_sentences, tag_iterations
         )
         sps = len(test_sentences) / rustling_tag_time
         if verbose:
             print(
-                f"\n  rustling.tagging.AveragedPerceptronTagger:"
+                f"\n  rustling.perceptron_pos_tagger.AveragedPerceptron:"
                 f"\n    Tagging time: {rustling_tag_time:.4f}s"
                 f" ({sps:,.0f} sentences/sec)"
             )
@@ -276,6 +280,15 @@ def run_benchmarks(
         speedup = nltk_tag_time / rustling_tag_time
         print(f"\n  ⚡ Tagging speedup: {speedup:.1f}x faster")
         results["benchmarks"]["tagging"]["speedup"] = speedup
+
+    # Compute speedups summary
+    speedups: dict[str, float] = {}
+    benchmarks = results.get("benchmarks", {})
+    if "training" in benchmarks and "speedup" in benchmarks["training"]:
+        speedups["Training"] = benchmarks["training"]["speedup"]
+    if "tagging" in benchmarks and "speedup" in benchmarks["tagging"]:
+        speedups["Tagging"] = benchmarks["tagging"]["speedup"]
+    results["speedups"] = speedups
 
     return results
 

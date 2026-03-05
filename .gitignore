@@ -71,6 +71,9 @@ python/docs/_build/
 # Pyenv
 .python-version
 
+# Benchmark results
+benchmarks/.results/
+
 # This is a library, not an application.
 Cargo.lock
 uv.lock

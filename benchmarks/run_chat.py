@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import glob
 import json
 import subprocess
 import sys
@@ -126,9 +125,10 @@ def run_benchmarks(
 ) -> dict[str, Any]:
     """Run all benchmarks."""
     good_dir = ensure_testchat()
+    zip_path = ensure_testchat_zip(good_dir)
+    zip_path_str = str(zip_path)
 
     rustling_chat = None
-    pylangacq_read = None
     pylangacq_reader = None
 
     try:
@@ -144,7 +144,6 @@ def run_benchmarks(
     try:
         import pylangacq
 
-        pylangacq_read = pylangacq.read_chat
         pylangacq_reader = pylangacq.Reader
         if verbose:
             print("pylangacq loaded successfully")
@@ -152,12 +151,11 @@ def run_benchmarks(
         if verbose:
             print(f"pylangacq not available: {e}")
 
-    if rustling_chat is None and pylangacq_read is None:
+    if rustling_chat is None and pylangacq_reader is None:
         print("\nError: Neither implementation is available.")
         sys.exit(1)
 
     iterations = 3 if quick else 10
-    good_dir_str = str(good_dir)
 
     all_results: dict[str, Any] = {"benchmarks": {}}
 
@@ -165,52 +163,7 @@ def run_benchmarks(
     print("CHAT BENCHMARK: Rustling (Rust) vs pylangacq (Python)")
     print("=" * 60)
 
-    # Benchmark 1: from_dir (loading files)
-    if verbose:
-        print("\nfrom_dir (loading all testchat/good files):")
-
-    results = []
-    for name, impl_func in [
-        ("rustling", rustling_chat),
-        ("pylangacq", pylangacq_read),
-    ]:
-        if impl_func is None:
-            results.append(None)
-            continue
-
-        if name == "rustling":
-
-            def load() -> None:
-                impl_func.from_dir(good_dir_str, strict=False)
-
-        else:
-
-            def load() -> None:
-                impl_func(good_dir_str, strict=False)
-
-        total_time = time_function(load, iterations=iterations)
-        result = BenchmarkResult(
-            name="from_dir",
-            implementation=name,
-            time_seconds=total_time,
-            iterations=iterations,
-        )
-        results.append(result)
-        if verbose:
-            print_result(result)
-
-    if results[0] and results[1] and verbose:
-        print_comparison(results[0], results[1])
-
-    all_results["benchmarks"]["from_dir"] = {
-        "rustling": results[0].__dict__ if results[0] else None,
-        "pylangacq": results[1].__dict__ if results[1] else None,
-    }
-
-    # Benchmark 2: from_zip (loading from ZIP archive)
-    zip_path = ensure_testchat_zip(good_dir)
-    zip_path_str = str(zip_path)
-
+    # Benchmark 1: from_zip (loading from ZIP archive)
     if verbose:
         print("\nfrom_zip (loading from ZIP archive):")
 
@@ -223,15 +176,8 @@ def run_benchmarks(
             results.append(None)
             continue
 
-        if name == "rustling":
-
-            def load_zip() -> None:
-                impl_cls.from_zip(zip_path_str, strict=False)
-
-        else:
-
-            def load_zip() -> None:
-                impl_cls.from_zip(zip_path_str, strict=False)
+        def load_zip() -> None:
+            impl_cls.from_zip(zip_path_str, strict=False)
 
         total_time = time_function(load_zip, iterations=iterations)
         result = BenchmarkResult(
@@ -252,51 +198,7 @@ def run_benchmarks(
         "pylangacq": results[1].__dict__ if results[1] else None,
     }
 
-    # Benchmark 3: from_files (loading from file paths)
-    cha_files = sorted(glob.glob(str(good_dir / "*.cha")))
-
-    if verbose:
-        print(f"\nfrom_files (loading {len(cha_files)} individual files):")
-
-    results = []
-    for name, impl_cls in [
-        ("rustling", rustling_chat),
-        ("pylangacq", pylangacq_reader),
-    ]:
-        if impl_cls is None:
-            results.append(None)
-            continue
-
-        if name == "rustling":
-
-            def load_files() -> None:
-                impl_cls.from_files(cha_files, strict=False)
-
-        else:
-
-            def load_files() -> None:
-                impl_cls.from_files(cha_files, strict=False)
-
-        total_time = time_function(load_files, iterations=iterations)
-        result = BenchmarkResult(
-            name="from_files",
-            implementation=name,
-            time_seconds=total_time,
-            iterations=iterations,
-        )
-        results.append(result)
-        if verbose:
-            print_result(result)
-
-    if results[0] and results[1] and verbose:
-        print_comparison(results[0], results[1])
-
-    all_results["benchmarks"]["from_files"] = {
-        "rustling": results[0].__dict__ if results[0] else None,
-        "pylangacq": results[1].__dict__ if results[1] else None,
-    }
-
-    # Benchmark 4: from_strs (loading from in-memory strings)
+    # Benchmark 2: from_strs (loading from in-memory strings)
     chat_strs = []
     for f in sorted(good_dir.glob("*.cha")):
         chat_strs.append(f.read_text(encoding="utf-8"))
@@ -313,15 +215,8 @@ def run_benchmarks(
             results.append(None)
             continue
 
-        if name == "rustling":
-
-            def load_strs() -> None:
-                impl_cls.from_strs(chat_strs, strict=False)
-
-        else:
-
-            def load_strs() -> None:
-                impl_cls.from_strs(chat_strs, strict=False)
+        def load_strs() -> None:
+            impl_cls.from_strs(chat_strs, strict=False)
 
         total_time = time_function(load_strs, iterations=iterations)
         result = BenchmarkResult(
@@ -342,65 +237,20 @@ def run_benchmarks(
         "pylangacq": results[1].__dict__ if results[1] else None,
     }
 
-    # Benchmark 5: words() extraction
-    if verbose:
-        print("\nwords() extraction:")
-
-    results = []
-    for name, impl_func in [
-        ("rustling", rustling_chat),
-        ("pylangacq", pylangacq_read),
-    ]:
-        if impl_func is None:
-            results.append(None)
-            continue
-
-        if name == "rustling":
-            reader = impl_func.from_dir(good_dir_str, strict=False)
-        else:
-            reader = impl_func(good_dir_str, strict=False)
-
-        def extract_words() -> None:
-            reader.words()
-
-        total_time = time_function(extract_words, iterations=iterations)
-        n_words = len(reader.words())
-        result = BenchmarkResult(
-            name="words",
-            implementation=name,
-            time_seconds=total_time,
-            iterations=iterations,
-            detail=f"{n_words} words",
-        )
-        results.append(result)
-        if verbose:
-            print_result(result)
-
-    if results[0] and results[1] and verbose:
-        print_comparison(results[0], results[1])
-
-    all_results["benchmarks"]["words"] = {
-        "rustling": results[0].__dict__ if results[0] else None,
-        "pylangacq": results[1].__dict__ if results[1] else None,
-    }
-
-    # Benchmark 6: utterances() extraction
+    # Benchmark 3: utterances() extraction
     if verbose:
         print("\nutterances() extraction:")
 
     results = []
-    for name, impl_func in [
+    for name, impl_cls in [
         ("rustling", rustling_chat),
-        ("pylangacq", pylangacq_read),
+        ("pylangacq", pylangacq_reader),
     ]:
-        if impl_func is None:
+        if impl_cls is None:
             results.append(None)
             continue
 
-        if name == "rustling":
-            reader = impl_func.from_dir(good_dir_str, strict=False)
-        else:
-            reader = impl_func(good_dir_str, strict=False)
+        reader = impl_cls.from_zip(zip_path_str, strict=False)
 
         def extract_utts() -> None:
             reader.utterances()
@@ -425,6 +275,56 @@ def run_benchmarks(
         "rustling": results[0].__dict__ if results[0] else None,
         "pylangacq": results[1].__dict__ if results[1] else None,
     }
+
+    # Benchmark 4: tokens() extraction
+    if verbose:
+        print("\ntokens() extraction:")
+
+    results = []
+    for name, impl_cls in [
+        ("rustling", rustling_chat),
+        ("pylangacq", pylangacq_reader),
+    ]:
+        if impl_cls is None:
+            results.append(None)
+            continue
+
+        reader = impl_cls.from_zip(zip_path_str, strict=False)
+
+        def extract_tokens() -> None:
+            reader.tokens()
+
+        total_time = time_function(extract_tokens, iterations=iterations)
+        n_tokens = len(reader.tokens())
+        result = BenchmarkResult(
+            name="tokens",
+            implementation=name,
+            time_seconds=total_time,
+            iterations=iterations,
+            detail=f"{n_tokens} tokens",
+        )
+        results.append(result)
+        if verbose:
+            print_result(result)
+
+    if results[0] and results[1] and verbose:
+        print_comparison(results[0], results[1])
+
+    all_results["benchmarks"]["tokens"] = {
+        "rustling": results[0].__dict__ if results[0] else None,
+        "pylangacq": results[1].__dict__ if results[1] else None,
+    }
+
+    # Compute speedups for each task
+    speedups: dict[str, float] = {}
+    for task in ["from_zip", "from_strs", "utterances", "tokens"]:
+        bench = all_results["benchmarks"].get(task, {})
+        r = bench.get("rustling")
+        p = bench.get("pylangacq")
+        if r and p and r["time_seconds"] > 0:
+            display = f"{task}()" if task in ("utterances", "tokens") else task
+            speedups[display] = p["time_seconds"] / r["time_seconds"]
+    all_results["speedups"] = speedups
 
     return all_results
 

@@ -1,0 +1,18 @@
+namespace rustling.lm_fbs;
+
+// One n-gram count entry.
+// The ngram is stored as a flat array of strings (context + word together).
+table NgramEntry {
+    ngram: [string] (required);
+    count: uint64;
+}
+
+table LmModel {
+    order:      uint32;
+    smoothing:  string (required);  // "MLE" or "Lidstone"
+    gamma:      double;             // Lidstone gamma; 0.0 for MLE
+    vocabulary: [string] (required);
+    ngrams:     [NgramEntry] (required);
+}
+
+root_type LmModel;

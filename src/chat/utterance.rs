@@ -13,8 +13,12 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+// ---------------------------------------------------------------------------
+// Gra (shared, stays as #[pyclass])
+// ---------------------------------------------------------------------------
+
 /// A grammatical relation from the %gra tier.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Gra {
     #[pyo3(get)]
@@ -50,105 +54,141 @@ impl Gra {
     }
 }
 
+// ---------------------------------------------------------------------------
+// BaseToken
+// ---------------------------------------------------------------------------
+
+/// Shared read access to token fields.
+///
+/// Implemented by rustling's [`Token`] and can be implemented by downstream
+/// crates to share behavior.
+pub trait BaseToken {
+    fn word(&self) -> &str;
+    fn pos(&self) -> Option<&str>;
+    fn mor(&self) -> Option<&str>;
+    fn gra(&self) -> Option<&Gra>;
+}
+
+// ---------------------------------------------------------------------------
+// Token (pure Rust)
+// ---------------------------------------------------------------------------
+
 /// A token with word, POS, morphology, and grammatical relation.
-#[pyclass]
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Token {
-    #[pyo3(get)]
     pub word: String,
-    #[pyo3(get)]
     pub pos: Option<String>,
-    #[pyo3(get)]
     pub mor: Option<String>,
-    #[pyo3(get)]
     pub gra: Option<Gra>,
 }
 
+impl BaseToken for Token {
+    fn word(&self) -> &str {
+        &self.word
+    }
+    fn pos(&self) -> Option<&str> {
+        self.pos.as_deref()
+    }
+    fn mor(&self) -> Option<&str> {
+        self.mor.as_deref()
+    }
+    fn gra(&self) -> Option<&Gra> {
+        self.gra.as_ref()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PyToken (Python wrapper)
+// ---------------------------------------------------------------------------
+
+/// Python wrapper for [`Token`].
+#[pyclass(name = "Token", from_py_object)]
+#[derive(Clone)]
+pub struct PyToken(pub Token);
+
 #[pymethods]
-impl Token {
+impl PyToken {
     #[new]
     #[pyo3(signature = (word, pos=None, mor=None, gra=None))]
     fn new(word: String, pos: Option<String>, mor: Option<String>, gra: Option<Gra>) -> Self {
-        Self {
+        Self(Token {
             word,
             pos,
             mor,
             gra,
-        }
+        })
+    }
+
+    #[getter]
+    fn word(&self) -> &str {
+        &self.0.word
+    }
+
+    #[getter]
+    fn pos(&self) -> Option<&str> {
+        self.0.pos.as_deref()
+    }
+
+    #[getter]
+    fn mor(&self) -> Option<&str> {
+        self.0.mor.as_deref()
+    }
+
+    #[getter]
+    fn gra(&self) -> Option<Gra> {
+        self.0.gra.clone()
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Token(word='{}', pos={}, mor={}, gra={})",
-            self.word,
-            match &self.pos {
+            self.0.word,
+            match &self.0.pos {
                 Some(p) => format!("'{p}'"),
                 None => "None".to_string(),
             },
-            match &self.mor {
+            match &self.0.mor {
                 Some(m) => format!("'{m}'"),
                 None => "None".to_string(),
             },
-            match &self.gra {
+            match &self.0.gra {
                 Some(g) => g.__repr__(),
                 None => "None".to_string(),
             },
         )
     }
 
-    fn __eq__(&self, other: &Token) -> bool {
-        self == other
+    fn __eq__(&self, other: &PyToken) -> bool {
+        self.0 == other.0
     }
 
     fn __hash__(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
+        self.0.hash(&mut hasher);
         hasher.finish()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Utterance (pure Rust)
+// ---------------------------------------------------------------------------
 
 /// A single utterance from a CHAT transcript.
 ///
 /// For changeable headers (e.g., `@Comment`, `@New Episode`), only
 /// `changeable_header` is set; all other fields are `None`.
-#[pyclass]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Utterance {
-    #[pyo3(get)]
     pub participant: Option<String>,
-    #[pyo3(get)]
     pub tokens: Option<Vec<Token>>,
-    #[pyo3(get)]
     pub time_marks: Option<(i64, i64)>,
-    #[pyo3(get)]
     pub tiers: Option<HashMap<String, String>>,
-    #[pyo3(get)]
     pub changeable_header: Option<ChangeableHeader>,
 }
 
-#[pymethods]
 impl Utterance {
-    #[new]
-    #[pyo3(signature = (*, participant=None, tokens=None, time_marks=None, tiers=None, changeable_header=None))]
-    fn new(
-        participant: Option<String>,
-        tokens: Option<Vec<Token>>,
-        time_marks: Option<(i64, i64)>,
-        tiers: Option<HashMap<String, String>>,
-        changeable_header: Option<ChangeableHeader>,
-    ) -> Self {
-        Self {
-            participant,
-            tokens,
-            time_marks,
-            tiers,
-            changeable_header,
-        }
-    }
-
     /// Raw transcript of this utterance, or None for headers.
-    #[getter]
-    fn raw(&self) -> Option<String> {
+    pub fn raw(&self) -> Option<String> {
         self.tokens.as_ref().map(|tokens| {
             tokens
                 .iter()
@@ -159,19 +199,22 @@ impl Utterance {
         })
     }
 
-    fn __repr__(&self) -> String {
-        if let Some(ref ch) = self.changeable_header {
-            return format!("Utterance(changeable_header={ch:?})");
+    pub(crate) fn hash_into(&self, hasher: &mut impl Hasher) {
+        self.participant.hash(hasher);
+        self.tokens.hash(hasher);
+        self.time_marks.hash(hasher);
+        match &self.tiers {
+            Some(tiers) => {
+                true.hash(hasher);
+                hash_hashmap(tiers, hasher);
+            }
+            None => false.hash(hasher),
         }
-        format!(
-            "Utterance(participant='{}', tokens=[...{} tokens], time_marks={:?})",
-            self.participant.as_deref().unwrap_or(""),
-            self.tokens.as_ref().map_or(0, |t| t.len()),
-            self.time_marks,
-        )
+        self.changeable_header.hash(hasher);
     }
 
-    fn _repr_html_(&self) -> String {
+    /// Return an HTML representation of this utterance.
+    pub fn repr_html(&self) -> String {
         if let Some(ref ch) = self.changeable_header {
             return format!(
                 "<div class=\"rustling-changeable-header\" \
@@ -241,7 +284,7 @@ impl Utterance {
                     (Some(pos), Some(mor)) if !pos.is_empty() => {
                         format!("{}|{}", html_escape(pos), html_escape(mor))
                     }
-                    (Some(pos), Some(mor)) if pos.is_empty() => html_escape(mor),
+                    (Some(_pos), Some(mor)) if _pos.is_empty() => html_escape(mor),
                     (Some(pos), None) => html_escape(pos),
                     (None, Some(mor)) => html_escape(mor),
                     _ => String::new(),
@@ -294,16 +337,6 @@ impl Utterance {
         }
 
         html
-    }
-
-    fn __eq__(&self, other: &Utterance) -> bool {
-        self == other
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash_into(&mut hasher);
-        hasher.finish()
     }
 
     /// Return a plain text tabular representation of this utterance.
@@ -447,24 +480,103 @@ impl Utterance {
     }
 }
 
-impl Utterance {
-    pub(crate) fn hash_into(&self, hasher: &mut impl Hasher) {
-        self.participant.hash(hasher);
-        self.tokens.hash(hasher);
-        self.time_marks.hash(hasher);
-        match &self.tiers {
-            Some(tiers) => {
-                true.hash(hasher);
-                hash_hashmap(tiers, hasher);
-            }
-            None => false.hash(hasher),
+// ---------------------------------------------------------------------------
+// PyUtterance (Python wrapper)
+// ---------------------------------------------------------------------------
+
+/// Python wrapper for [`Utterance`].
+#[pyclass(name = "Utterance", from_py_object)]
+#[derive(Clone)]
+pub struct PyUtterance(pub Utterance);
+
+#[pymethods]
+impl PyUtterance {
+    #[new]
+    #[pyo3(signature = (*, participant=None, tokens=None, time_marks=None, tiers=None, changeable_header=None))]
+    fn new(
+        participant: Option<String>,
+        tokens: Option<Vec<PyToken>>,
+        time_marks: Option<(i64, i64)>,
+        tiers: Option<HashMap<String, String>>,
+        changeable_header: Option<ChangeableHeader>,
+    ) -> Self {
+        Self(Utterance {
+            participant,
+            tokens: tokens.map(|ts| ts.into_iter().map(|pt| pt.0).collect()),
+            time_marks,
+            tiers,
+            changeable_header,
+        })
+    }
+
+    #[getter]
+    fn participant(&self) -> Option<&str> {
+        self.0.participant.as_deref()
+    }
+
+    #[getter]
+    fn tokens(&self) -> Option<Vec<PyToken>> {
+        self.0
+            .tokens
+            .as_ref()
+            .map(|ts| ts.iter().map(|t| PyToken(t.clone())).collect())
+    }
+
+    #[getter]
+    fn time_marks(&self) -> Option<(i64, i64)> {
+        self.0.time_marks
+    }
+
+    #[getter]
+    fn tiers(&self) -> Option<HashMap<String, String>> {
+        self.0.tiers.clone()
+    }
+
+    #[getter]
+    fn changeable_header(&self) -> Option<ChangeableHeader> {
+        self.0.changeable_header.clone()
+    }
+
+    /// Raw transcript of this utterance, or None for headers.
+    #[getter]
+    fn raw(&self) -> Option<String> {
+        self.0.raw()
+    }
+
+    fn __repr__(&self) -> String {
+        if let Some(ref ch) = self.0.changeable_header {
+            return format!("Utterance(changeable_header={ch:?})");
         }
-        self.changeable_header.hash(hasher);
+        format!(
+            "Utterance(participant='{}', tokens=[...{} tokens], time_marks={:?})",
+            self.0.participant.as_deref().unwrap_or(""),
+            self.0.tokens.as_ref().map_or(0, |t| t.len()),
+            self.0.time_marks,
+        )
+    }
+
+    fn _repr_html_(&self) -> String {
+        self.0.repr_html()
+    }
+
+    fn __eq__(&self, other: &PyUtterance) -> bool {
+        self.0 == other.0
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.0.hash_into(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Return a plain text tabular representation of this utterance.
+    pub fn to_str(&self) -> String {
+        self.0.to_str()
     }
 }
 
 /// Convert a `ChangeableHeader` to its CHAT-format string (e.g., `@Comment:\tChild laughs`).
-fn changeable_header_to_chat(ch: &ChangeableHeader) -> String {
+pub(crate) fn changeable_header_to_chat(ch: &ChangeableHeader) -> String {
     match ch {
         ChangeableHeader::Activities { value } => format!("@Activities:\t{value}"),
         ChangeableHeader::Bck { value } => format!("@Bck:\t{value}"),
@@ -489,13 +601,78 @@ fn changeable_header_to_chat(ch: &ChangeableHeader) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// BaseUtterance
+// ---------------------------------------------------------------------------
+
+/// Shared behavior for utterance types.
+///
+/// Implemented by rustling's [`Utterance`] and can be implemented by downstream
+/// crates (e.g., pycantonese) so that [`BaseChat::from_utterances`](super::reader::BaseChat::from_utterances) works
+/// generically.
+pub trait BaseUtterance {
+    /// Convert this utterance to CHAT-format raw lines.
+    ///
+    /// For changeable headers, returns a single line (e.g., `@G`).
+    /// For regular utterances, returns the main tier followed by dependent tiers.
+    /// Returns an empty Vec if tier data is unavailable.
+    fn to_chat_lines(&self) -> Vec<String>;
+
+    /// Convert this utterance to a rustling [`Utterance`] for storage in
+    /// [`ChatFile`](super::reader::ChatFile).
+    fn to_utterance(&self) -> Utterance;
+}
+
+impl BaseUtterance for Utterance {
+    fn to_chat_lines(&self) -> Vec<String> {
+        if let Some(ref ch) = self.changeable_header {
+            return vec![changeable_header_to_chat(ch)];
+        }
+
+        let (Some(participant), Some(tiers)) = (&self.participant, &self.tiers) else {
+            return Vec::new();
+        };
+
+        let mut lines = Vec::new();
+
+        // Main tier: *PARTICIPANT:\t<content>
+        if let Some(main_content) = tiers.get(participant) {
+            lines.push(format!("*{participant}:\t{main_content}"));
+        }
+
+        // Dependent tiers: %mor first, %gra second, then others sorted.
+        for key in ["%mor", "%gra"] {
+            if let Some(value) = tiers.get(key) {
+                lines.push(format!("{key}:\t{value}"));
+            }
+        }
+        let mut other_keys: Vec<_> = tiers
+            .keys()
+            .filter(|k| k.as_str() != participant && k.as_str() != "%mor" && k.as_str() != "%gra")
+            .collect();
+        other_keys.sort();
+        for key in other_keys {
+            lines.push(format!("{key}:\t{}", tiers[key]));
+        }
+
+        lines
+    }
+
+    fn to_utterance(&self) -> Utterance {
+        self.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utterances (pure Rust)
+// ---------------------------------------------------------------------------
+
 /// A sequence of utterances with a formatted display for terminal/notebook use.
 ///
-/// Returned by [`Chat::head`] and [`Chat::tail`].
-#[pyclass]
+/// Returned by `Chat::head` and `Chat::tail`.
 #[derive(Clone)]
 pub struct Utterances {
-    pub(crate) utterances: Vec<Utterance>,
+    pub utterances: Vec<Utterance>,
 }
 
 impl Utterances {
@@ -504,10 +681,20 @@ impl Utterances {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PyUtterances (Python wrapper)
+// ---------------------------------------------------------------------------
+
+/// Python wrapper for [`Utterances`].
+#[pyclass(name = "Utterances", from_py_object)]
+#[derive(Clone)]
+pub struct PyUtterances(pub Utterances);
+
 #[pymethods]
-impl Utterances {
+impl PyUtterances {
     fn __repr__(&self) -> String {
-        self.utterances
+        self.0
+            .utterances
             .iter()
             .map(|u| u.to_str())
             .collect::<Vec<_>>()
@@ -519,67 +706,68 @@ impl Utterances {
     }
 
     fn _repr_html_(&self) -> String {
-        self.utterances
+        self.0
+            .utterances
             .iter()
-            .map(|u| u._repr_html_())
+            .map(|u| u.repr_html())
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     fn __len__(&self) -> usize {
-        self.utterances.len()
+        self.0.utterances.len()
     }
 
-    fn __getitem__(&self, index: isize) -> PyResult<Utterance> {
-        let len = self.utterances.len() as isize;
+    fn __getitem__(&self, index: isize) -> PyResult<PyUtterance> {
+        let len = self.0.utterances.len() as isize;
         let idx = if index < 0 { len + index } else { index };
         if idx < 0 || idx >= len {
             return Err(pyo3::exceptions::PyIndexError::new_err(
                 "index out of range",
             ));
         }
-        Ok(self.utterances[idx as usize].clone())
+        Ok(PyUtterance(self.0.utterances[idx as usize].clone()))
     }
 
-    fn __eq__(&self, other: &Utterances) -> bool {
-        self.utterances == other.utterances
+    fn __eq__(&self, other: &PyUtterances) -> bool {
+        self.0.utterances == other.0.utterances
     }
 
     fn __hash__(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        self.utterances.len().hash(&mut hasher);
-        for u in &self.utterances {
+        self.0.utterances.len().hash(&mut hasher);
+        for u in &self.0.utterances {
             u.hash_into(&mut hasher);
         }
         hasher.finish()
     }
 
-    fn __iter__(slf: PyRef<'_, Self>) -> UtterancesIter {
-        UtterancesIter {
-            inner: slf.utterances.clone(),
+    fn __iter__(slf: PyRef<'_, Self>) -> PyUtterancesIter {
+        PyUtterancesIter {
+            inner: slf.0.utterances.clone(),
             index: 0,
         }
     }
 }
 
-/// Iterator for [`Utterances`].
+/// Iterator for [`PyUtterances`].
 #[pyclass]
-struct UtterancesIter {
+struct PyUtterancesIter {
     inner: Vec<Utterance>,
     index: usize,
 }
 
 #[pymethods]
-impl UtterancesIter {
+impl PyUtterancesIter {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __next__(&mut self) -> Option<Utterance> {
+    fn __next__(&mut self) -> Option<PyUtterance> {
         if self.index < self.inner.len() {
             let item = self.inner[self.index].clone();
             self.index += 1;
-            Some(item)
+            Some(PyUtterance(item))
         } else {
             None
         }
@@ -870,5 +1058,72 @@ mod tests {
             changeable_header: None,
         };
         assert_eq!(utt.raw(), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_to_chat_lines_regular() {
+        let mut tiers = HashMap::new();
+        tiers.insert("CHI".to_string(), "I want cookie .".to_string());
+        tiers.insert("%mor".to_string(), "pro|I v|want n|cookie .".to_string());
+        tiers.insert(
+            "%gra".to_string(),
+            "1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT".to_string(),
+        );
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![]),
+            time_marks: None,
+            tiers: Some(tiers),
+            changeable_header: None,
+        };
+        let lines = utt.to_chat_lines();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "*CHI:\tI want cookie .");
+        assert_eq!(lines[1], "%mor:\tpro|I v|want n|cookie .");
+        assert_eq!(lines[2], "%gra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT");
+    }
+
+    #[test]
+    fn test_to_chat_lines_with_other_tiers() {
+        let mut tiers = HashMap::new();
+        tiers.insert("CHI".to_string(), "hello .".to_string());
+        tiers.insert("%sit".to_string(), "playing with toys".to_string());
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![]),
+            time_marks: None,
+            tiers: Some(tiers),
+            changeable_header: None,
+        };
+        let lines = utt.to_chat_lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "*CHI:\thello .");
+        assert_eq!(lines[1], "%sit:\tplaying with toys");
+    }
+
+    #[test]
+    fn test_to_chat_lines_changeable_header() {
+        let utt = Utterance {
+            participant: None,
+            tokens: None,
+            time_marks: None,
+            tiers: None,
+            changeable_header: Some(ChangeableHeader::G { value: None }),
+        };
+        let lines = utt.to_chat_lines();
+        assert_eq!(lines, vec!["@G"]);
+    }
+
+    #[test]
+    fn test_to_chat_lines_no_tiers() {
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![]),
+            time_marks: None,
+            tiers: None,
+            changeable_header: None,
+        };
+        let lines = utt.to_chat_lines();
+        assert!(lines.is_empty());
     }
 }
