@@ -24,7 +24,7 @@ jobs:
           args: --out dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: dist
@@ -82,7 +82,7 @@ jobs:
             mv flatc /usr/local/bin/
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.target }}
           path: dist
@@ -142,7 +142,7 @@ jobs:
         run: uvx maturin build --release --target wasm32-unknown-emscripten --out dist -i 3.13 --no-default-features --features extension-module
 
       - name: Upload wasm wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # Not "wheels-*" to avoid being picked up by the PyPI publish step,
           # which rejects the emscripten platform tag.
