@@ -1,9 +1,10 @@
 //! Data structures for CHAT transcription data.
 
+use crate::chat::clean_utterance::audible_utterance;
 use crate::chat::header::{ChangeableHeader, hash_hashmap};
+#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Escape HTML special characters in text content.
@@ -18,40 +19,12 @@ fn html_escape(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// A grammatical relation from the %gra tier.
-#[pyclass(from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(from_py_object))]
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Gra {
-    #[pyo3(get)]
     pub dep: usize,
-    #[pyo3(get)]
     pub head: usize,
-    #[pyo3(get)]
     pub rel: String,
-}
-
-#[pymethods]
-impl Gra {
-    #[new]
-    fn new(dep: usize, head: usize, rel: String) -> Self {
-        Self { dep, head, rel }
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Gra(dep={}, head={}, rel='{}')",
-            self.dep, self.head, self.rel
-        )
-    }
-
-    fn __eq__(&self, other: &Gra) -> bool {
-        self == other
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -98,78 +71,6 @@ impl BaseToken for Token {
 }
 
 // ---------------------------------------------------------------------------
-// PyToken (Python wrapper)
-// ---------------------------------------------------------------------------
-
-/// Python wrapper for [`Token`].
-#[pyclass(name = "Token", from_py_object)]
-#[derive(Clone)]
-pub struct PyToken(pub Token);
-
-#[pymethods]
-impl PyToken {
-    #[new]
-    #[pyo3(signature = (word, pos=None, mor=None, gra=None))]
-    fn new(word: String, pos: Option<String>, mor: Option<String>, gra: Option<Gra>) -> Self {
-        Self(Token {
-            word,
-            pos,
-            mor,
-            gra,
-        })
-    }
-
-    #[getter]
-    fn word(&self) -> &str {
-        &self.0.word
-    }
-
-    #[getter]
-    fn pos(&self) -> Option<&str> {
-        self.0.pos.as_deref()
-    }
-
-    #[getter]
-    fn mor(&self) -> Option<&str> {
-        self.0.mor.as_deref()
-    }
-
-    #[getter]
-    fn gra(&self) -> Option<Gra> {
-        self.0.gra.clone()
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Token(word='{}', pos={}, mor={}, gra={})",
-            self.0.word,
-            match &self.0.pos {
-                Some(p) => format!("'{p}'"),
-                None => "None".to_string(),
-            },
-            match &self.0.mor {
-                Some(m) => format!("'{m}'"),
-                None => "None".to_string(),
-            },
-            match &self.0.gra {
-                Some(g) => g.__repr__(),
-                None => "None".to_string(),
-            },
-        )
-    }
-
-    fn __eq__(&self, other: &PyToken) -> bool {
-        self.0 == other.0
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Utterance (pure Rust)
 // ---------------------------------------------------------------------------
 
@@ -184,11 +85,28 @@ pub struct Utterance {
     pub time_marks: Option<(i64, i64)>,
     pub tiers: Option<HashMap<String, String>>,
     pub changeable_header: Option<ChangeableHeader>,
+    /// The `%`-prefixed tier name used as the morphology tier (e.g., `"%mor"`, `"%xmor"`),
+    /// or `None` if mor+gra handling was disabled.
+    pub mor_tier_name: Option<String>,
+    /// The `%`-prefixed tier name used as the grammatical relation tier (e.g., `"%gra"`),
+    /// or `None` if mor+gra handling was disabled.
+    pub gra_tier_name: Option<String>,
 }
 
 impl Utterance {
-    /// Raw transcript of this utterance, or None for headers.
-    pub fn raw(&self) -> Option<String> {
+    /// Audibly faithful transcript of this utterance, or None for headers.
+    ///
+    /// When tier data is available the result is computed from the original
+    /// main-tier text via [`audible_utterance`]; otherwise it falls back to
+    /// joining the token words (for manually constructed utterances).
+    pub fn audible(&self) -> Option<String> {
+        // Primary: compute from original main tier text.
+        if let (Some(participant), Some(tiers)) = (&self.participant, &self.tiers)
+            && let Some(main_tier) = tiers.get(participant)
+        {
+            return Some(audible_utterance(main_tier));
+        }
+        // Fallback: join token words (for manually constructed utterances).
         self.tokens.as_ref().map(|tokens| {
             tokens
                 .iter()
@@ -211,6 +129,8 @@ impl Utterance {
             None => false.hash(hasher),
         }
         self.changeable_header.hash(hasher);
+        self.mor_tier_name.hash(hasher);
+        self.gra_tier_name.hash(hasher);
     }
 
     /// Return an HTML representation of this utterance.
@@ -234,10 +154,13 @@ impl Utterance {
 
         let empty_map = HashMap::new();
         let tiers_map = tiers.unwrap_or(&empty_map);
+        let mor_tier = self.mor_tier_name.as_deref().unwrap_or("%mor");
+        let gra_tier = self.gra_tier_name.as_deref().unwrap_or("%gra");
+
         let mut other_tiers: Vec<(&String, &String)> = tiers_map
             .iter()
             .filter(|(k, _)| {
-                k.as_str() != participant && k.as_str() != "%mor" && k.as_str() != "%gra"
+                k.as_str() != participant && k.as_str() != mor_tier && k.as_str() != gra_tier
             })
             .collect();
         other_tiers.sort_by_key(|(k, _)| k.as_str().to_owned());
@@ -278,7 +201,10 @@ impl Utterance {
         // Row: %mor (reconstructed from token fields)
         if has_mor {
             html.push_str("<tr>");
-            html.push_str(&format!("<th style=\"{th_style}\">%mor:</th>"));
+            html.push_str(&format!(
+                "<th style=\"{th_style}\">{}:</th>",
+                html_escape(mor_tier)
+            ));
             for token in tokens {
                 let cell = match (&token.pos, &token.mor) {
                     (Some(pos), Some(mor)) if !pos.is_empty() => {
@@ -297,7 +223,10 @@ impl Utterance {
         // Row: %gra (reconstructed from token fields)
         if has_gra {
             html.push_str("<tr>");
-            html.push_str(&format!("<th style=\"{th_style}\">%gra:</th>"));
+            html.push_str(&format!(
+                "<th style=\"{th_style}\">{}:</th>",
+                html_escape(gra_tier)
+            ));
             for token in tokens {
                 let cell = match &token.gra {
                     Some(g) => format!("{}|{}|{}", g.dep, g.head, html_escape(&g.rel)),
@@ -355,10 +284,13 @@ impl Utterance {
 
         let empty_map = HashMap::new();
         let tiers_map = tiers.unwrap_or(&empty_map);
+        let mor_tier = self.mor_tier_name.as_deref().unwrap_or("%mor");
+        let gra_tier = self.gra_tier_name.as_deref().unwrap_or("%gra");
+
         let mut other_tiers: Vec<(&String, &String)> = tiers_map
             .iter()
             .filter(|(k, _)| {
-                k.as_str() != participant && k.as_str() != "%mor" && k.as_str() != "%gra"
+                k.as_str() != participant && k.as_str() != mor_tier && k.as_str() != gra_tier
             })
             .collect();
         other_tiers.sort_by_key(|(k, _)| k.as_str().to_owned());
@@ -395,12 +327,14 @@ impl Utterance {
         };
 
         // Compute label column width.
+        let mor_label = format!("{mor_tier}:");
+        let gra_label = format!("{gra_tier}:");
         let mut label_width = participant_label.len();
         if has_mor {
-            label_width = label_width.max(5); // "%mor:"
+            label_width = label_width.max(mor_label.len());
         }
         if has_gra {
-            label_width = label_width.max(5); // "%gra:"
+            label_width = label_width.max(gra_label.len());
         }
         for (tier_name, _) in &other_tiers {
             label_width = label_width.max(tier_name.len() + 1); // "name:"
@@ -449,12 +383,12 @@ impl Utterance {
 
         // %mor row
         if has_mor {
-            lines.push(format_row("%mor:", &mor_cells));
+            lines.push(format_row(&mor_label, &mor_cells));
         }
 
         // %gra row
         if has_gra {
-            lines.push(format_row("%gra:", &gra_cells));
+            lines.push(format_row(&gra_label, &gra_cells));
         }
 
         // Other tiers (full-width, not column-aligned)
@@ -477,101 +411,6 @@ impl Utterance {
         }
 
         lines.join("\n")
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PyUtterance (Python wrapper)
-// ---------------------------------------------------------------------------
-
-/// Python wrapper for [`Utterance`].
-#[pyclass(name = "Utterance", from_py_object)]
-#[derive(Clone)]
-pub struct PyUtterance(pub Utterance);
-
-#[pymethods]
-impl PyUtterance {
-    #[new]
-    #[pyo3(signature = (*, participant=None, tokens=None, time_marks=None, tiers=None, changeable_header=None))]
-    fn new(
-        participant: Option<String>,
-        tokens: Option<Vec<PyToken>>,
-        time_marks: Option<(i64, i64)>,
-        tiers: Option<HashMap<String, String>>,
-        changeable_header: Option<ChangeableHeader>,
-    ) -> Self {
-        Self(Utterance {
-            participant,
-            tokens: tokens.map(|ts| ts.into_iter().map(|pt| pt.0).collect()),
-            time_marks,
-            tiers,
-            changeable_header,
-        })
-    }
-
-    #[getter]
-    fn participant(&self) -> Option<&str> {
-        self.0.participant.as_deref()
-    }
-
-    #[getter]
-    fn tokens(&self) -> Option<Vec<PyToken>> {
-        self.0
-            .tokens
-            .as_ref()
-            .map(|ts| ts.iter().map(|t| PyToken(t.clone())).collect())
-    }
-
-    #[getter]
-    fn time_marks(&self) -> Option<(i64, i64)> {
-        self.0.time_marks
-    }
-
-    #[getter]
-    fn tiers(&self) -> Option<HashMap<String, String>> {
-        self.0.tiers.clone()
-    }
-
-    #[getter]
-    fn changeable_header(&self) -> Option<ChangeableHeader> {
-        self.0.changeable_header.clone()
-    }
-
-    /// Raw transcript of this utterance, or None for headers.
-    #[getter]
-    fn raw(&self) -> Option<String> {
-        self.0.raw()
-    }
-
-    fn __repr__(&self) -> String {
-        if let Some(ref ch) = self.0.changeable_header {
-            return format!("Utterance(changeable_header={ch:?})");
-        }
-        format!(
-            "Utterance(participant='{}', tokens=[...{} tokens], time_marks={:?})",
-            self.0.participant.as_deref().unwrap_or(""),
-            self.0.tokens.as_ref().map_or(0, |t| t.len()),
-            self.0.time_marks,
-        )
-    }
-
-    fn _repr_html_(&self) -> String {
-        self.0.repr_html()
-    }
-
-    fn __eq__(&self, other: &PyUtterance) -> bool {
-        self.0 == other.0
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.hash_into(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Return a plain text tabular representation of this utterance.
-    pub fn to_str(&self) -> String {
-        self.0.to_str()
     }
 }
 
@@ -640,15 +479,19 @@ impl BaseUtterance for Utterance {
             lines.push(format!("*{participant}:\t{main_content}"));
         }
 
-        // Dependent tiers: %mor first, %gra second, then others sorted.
-        for key in ["%mor", "%gra"] {
+        // Dependent tiers: mor tier first, gra tier second, then others sorted.
+        let mor_tier = self.mor_tier_name.as_deref().unwrap_or("%mor");
+        let gra_tier = self.gra_tier_name.as_deref().unwrap_or("%gra");
+        for key in [mor_tier, gra_tier] {
             if let Some(value) = tiers.get(key) {
                 lines.push(format!("{key}:\t{value}"));
             }
         }
         let mut other_keys: Vec<_> = tiers
             .keys()
-            .filter(|k| k.as_str() != participant && k.as_str() != "%mor" && k.as_str() != "%gra")
+            .filter(|k| {
+                k.as_str() != participant && k.as_str() != mor_tier && k.as_str() != gra_tier
+            })
             .collect();
         other_keys.sort();
         for key in other_keys {
@@ -678,99 +521,6 @@ pub struct Utterances {
 impl Utterances {
     pub fn new(utterances: Vec<Utterance>) -> Self {
         Self { utterances }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PyUtterances (Python wrapper)
-// ---------------------------------------------------------------------------
-
-/// Python wrapper for [`Utterances`].
-#[pyclass(name = "Utterances", from_py_object)]
-#[derive(Clone)]
-pub struct PyUtterances(pub Utterances);
-
-#[pymethods]
-impl PyUtterances {
-    fn __repr__(&self) -> String {
-        self.0
-            .utterances
-            .iter()
-            .map(|u| u.to_str())
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    }
-
-    fn __str__(&self) -> String {
-        self.__repr__()
-    }
-
-    fn _repr_html_(&self) -> String {
-        self.0
-            .utterances
-            .iter()
-            .map(|u| u.repr_html())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn __len__(&self) -> usize {
-        self.0.utterances.len()
-    }
-
-    fn __getitem__(&self, index: isize) -> PyResult<PyUtterance> {
-        let len = self.0.utterances.len() as isize;
-        let idx = if index < 0 { len + index } else { index };
-        if idx < 0 || idx >= len {
-            return Err(pyo3::exceptions::PyIndexError::new_err(
-                "index out of range",
-            ));
-        }
-        Ok(PyUtterance(self.0.utterances[idx as usize].clone()))
-    }
-
-    fn __eq__(&self, other: &PyUtterances) -> bool {
-        self.0.utterances == other.0.utterances
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.0.utterances.len().hash(&mut hasher);
-        for u in &self.0.utterances {
-            u.hash_into(&mut hasher);
-        }
-        hasher.finish()
-    }
-
-    fn __iter__(slf: PyRef<'_, Self>) -> PyUtterancesIter {
-        PyUtterancesIter {
-            inner: slf.0.utterances.clone(),
-            index: 0,
-        }
-    }
-}
-
-/// Iterator for [`PyUtterances`].
-#[pyclass]
-struct PyUtterancesIter {
-    inner: Vec<Utterance>,
-    index: usize,
-}
-
-#[pymethods]
-impl PyUtterancesIter {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&mut self) -> Option<PyUtterance> {
-        if self.index < self.inner.len() {
-            let item = self.inner[self.index].clone();
-            self.index += 1;
-            Some(PyUtterance(item))
-        } else {
-            None
-        }
     }
 }
 
@@ -817,6 +567,8 @@ mod tests {
             time_marks: None,
             tiers: Some(HashMap::new()),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         assert!(s.contains("*CHI:"));
@@ -850,6 +602,8 @@ mod tests {
             time_marks: None,
             tiers: Some(HashMap::new()),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         assert!(s.contains("*CHI:"));
@@ -872,6 +626,8 @@ mod tests {
             time_marks: Some((0, 1500)),
             tiers: Some(HashMap::new()),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         assert!(s.contains("0"));
@@ -895,6 +651,8 @@ mod tests {
             time_marks: None,
             tiers: Some(tiers),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         assert!(s.contains("%sit:"));
@@ -909,6 +667,8 @@ mod tests {
             time_marks: None,
             tiers: Some(HashMap::new()),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         assert!(s.contains("*CHI:"));
@@ -944,6 +704,8 @@ mod tests {
             time_marks: None,
             tiers: Some(HashMap::new()),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let s = utt.to_str();
         let line_list: Vec<&str> = s.lines().collect();
@@ -970,6 +732,8 @@ mod tests {
             changeable_header: Some(ChangeableHeader::Comment {
                 value: "Child laughs".to_string(),
             }),
+            mor_tier_name: None,
+            gra_tier_name: None,
         };
         assert_eq!(utt.to_str(), "@Comment:\tChild laughs");
     }
@@ -982,12 +746,15 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: Some(ChangeableHeader::NewEpisode {}),
+            mor_tier_name: None,
+            gra_tier_name: None,
         };
         assert_eq!(utt.to_str(), "@New Episode");
     }
 
     #[test]
-    fn test_raw_with_tokens() {
+    fn test_audible_with_tokens() {
+        // Fallback path: no tiers, so audible is computed from tokens.
         let utt = Utterance {
             participant: Some("CHI".to_string()),
             tokens: Some(vec![
@@ -1013,24 +780,29 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
-        assert_eq!(utt.raw(), Some("I want cookie".to_string()));
+        assert_eq!(utt.audible(), Some("I want cookie".to_string()));
     }
 
     #[test]
-    fn test_raw_with_none_tokens() {
+    fn test_audible_with_none_tokens() {
         let utt = Utterance {
             participant: None,
             tokens: None,
             time_marks: None,
             tiers: None,
             changeable_header: Some(ChangeableHeader::NewEpisode {}),
+            mor_tier_name: None,
+            gra_tier_name: None,
         };
-        assert_eq!(utt.raw(), None);
+        assert_eq!(utt.audible(), None);
     }
 
     #[test]
-    fn test_raw_with_empty_words() {
+    fn test_audible_with_empty_words() {
+        // Fallback path: no tiers, so audible is computed from tokens.
         let utt = Utterance {
             participant: Some("CHI".to_string()),
             tokens: Some(vec![
@@ -1056,8 +828,27 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
-        assert_eq!(utt.raw(), Some("hello world".to_string()));
+        assert_eq!(utt.audible(), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_audible_from_tiers() {
+        // Primary path: tiers available, audible is computed from main tier.
+        let mut tiers = HashMap::new();
+        tiers.insert("CHI".to_string(), "I want cookie .".to_string());
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![]),
+            time_marks: None,
+            tiers: Some(tiers),
+            changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
+        };
+        assert_eq!(utt.audible(), Some("I want cookie .".to_string()));
     }
 
     #[test]
@@ -1075,6 +866,8 @@ mod tests {
             time_marks: None,
             tiers: Some(tiers),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let lines = utt.to_chat_lines();
         assert_eq!(lines.len(), 3);
@@ -1094,6 +887,8 @@ mod tests {
             time_marks: None,
             tiers: Some(tiers),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let lines = utt.to_chat_lines();
         assert_eq!(lines.len(), 2);
@@ -1109,6 +904,8 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: Some(ChangeableHeader::G { value: None }),
+            mor_tier_name: None,
+            gra_tier_name: None,
         };
         let lines = utt.to_chat_lines();
         assert_eq!(lines, vec!["@G"]);
@@ -1122,6 +919,8 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let lines = utt.to_chat_lines();
         assert!(lines.is_empty());

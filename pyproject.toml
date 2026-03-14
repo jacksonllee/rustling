@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 license = "MIT"
 authors = [ { name = "Jackson L. Lee", email = "jacksonlunlee@gmail.com" } ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
     "Intended Audience :: Information Technology",
@@ -38,10 +38,7 @@ classifiers = [
 dynamic = ["version", "keywords"]
 
 [project.urls]
-"Python Documentation" = "https://rustling.readthedocs.io"
-"Rust Documentation" = "https://docs.rs/rustling"
 Source = "https://github.com/jacksonllee/rustling"
-Changelog = "https://github.com/jacksonllee/rustling/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 features = ["extension-module", "parallel"]

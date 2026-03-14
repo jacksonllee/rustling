@@ -5,9 +5,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
-use std::path::PathBuf;
-
-use pyo3::prelude::*;
 
 use crate::persistence::ModelError;
 use crate::seq_feature::SeqFeatureTemplate;
@@ -226,9 +223,23 @@ impl DagHmmSegmenter {
         }
     }
 
+    /// Compute log-likelihood of segmented sentences under the HMM component.
+    pub fn score(&self, sents: Vec<Vec<String>>) -> Result<Vec<f64>, ModelError> {
+        BaseHiddenMarkovModelSegmenter::score(&self.hmm, sents)
+    }
+
     /// Segment unsegmented sentence strings.
     pub fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
         sent_strs.iter().map(|s| self.segment_one(s)).collect()
+    }
+
+    /// Segment unsegmented sentences and return words with character offsets.
+    pub fn predict_with_offsets(
+        &self,
+        sent_strs: Vec<String>,
+    ) -> Vec<Vec<(String, (usize, usize))>> {
+        let words = self.predict(sent_strs);
+        crate::wordseg::attach_offsets(words)
     }
 
     /// Train the segmenter from supervised segmented sentences.
@@ -342,63 +353,6 @@ impl DagHmmSegmenter {
 }
 
 // ---------------------------------------------------------------------------
-// PyO3 wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed DAG + HMM hybrid segmenter.
-///
-/// Python users see this as `DAGHMMSegmenter`.
-#[pyclass(name = "DAGHMMSegmenter", from_py_object)]
-#[derive(Clone)]
-pub struct PyDagHmmSegmenter {
-    pub inner: DagHmmSegmenter,
-}
-
-#[pymethods]
-impl PyDagHmmSegmenter {
-    /// Create a new DAGHMMSegmenter.
-    #[new]
-    #[pyo3(signature = (*, n_iter=None, tolerance=None, gamma=None, random_seed=None, features=None))]
-    fn new(
-        n_iter: Option<usize>,
-        tolerance: Option<f64>,
-        gamma: Option<f64>,
-        random_seed: Option<u64>,
-        features: Option<Vec<SeqFeatureTemplate>>,
-    ) -> Self {
-        Self {
-            inner: DagHmmSegmenter::new(n_iter, tolerance, gamma, random_seed, features),
-        }
-    }
-
-    fn fit_segmented(&mut self, sents: Vec<Vec<String>>) {
-        self.inner.fit_segmented(sents);
-    }
-
-    fn fit_unsegmented(&mut self, sent_strs: Vec<String>) {
-        self.inner.fit_unsegmented(sent_strs);
-    }
-
-    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        self.inner.predict(sent_strs)
-    }
-
-    fn save(&self, path: PathBuf, metadata: HashMap<String, String>) -> PyResult<()> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Path is not valid UTF-8"))?;
-        Ok(self.inner.save(path_str, &metadata)?)
-    }
-
-    fn load(&mut self, path: PathBuf) -> PyResult<HashMap<String, String>> {
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Path is not valid UTF-8"))?;
-        Ok(self.inner.load(path_str)?)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -501,6 +455,37 @@ mod tests {
         // The remaining chars ("地球") go to HMM.
         let rest: String = result[0][1..].join("");
         assert_eq!(rest, "地球"); // All chars preserved.
+    }
+
+    #[test]
+    fn test_score_not_fitted() {
+        let seg = DagHmmSegmenter::new(None, None, None, None, None);
+        let result = seg.score(vec![vec!["你好".into(), "世界".into()]]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_score_empty_input() {
+        let mut seg = DagHmmSegmenter::new(None, None, None, None, None);
+        seg.fit_segmented(training_data());
+        let result = seg.score(vec![]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_score_returns_finite_values() {
+        let mut seg = DagHmmSegmenter::new(None, None, None, None, None);
+        seg.fit_segmented(training_data());
+        let scores = seg
+            .score(vec![
+                vec!["你好".into(), "世界".into()],
+                vec!["我".into(), "喜歡".into(), "你".into()],
+            ])
+            .unwrap();
+        assert_eq!(scores.len(), 2);
+        for s in &scores {
+            assert!(s.is_finite(), "score should be finite, got {}", s);
+        }
     }
 
     #[test]

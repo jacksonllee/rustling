@@ -1,5 +1,6 @@
 """Tests for rustling.chat.CHAT."""
 
+import datetime
 import warnings
 
 import pytest
@@ -162,18 +163,18 @@ class TestUtterances:
         assert "%mor" in tiers
         assert "%gra" in tiers
 
-    def test_utterance_raw(self):
+    def test_utterance_audible(self):
         reader = CHAT.from_strs([BASIC_CHAT])
         utts = reader.utterances()
-        assert utts[0].raw == "I want cookie ."
+        assert utts[0].audible == "I want cookie ."
 
-    def test_utterance_raw_constructed(self):
+    def test_utterance_audible_constructed(self):
         utt = Utterance(tokens=[Token("hello"), Token("world")])
-        assert utt.raw == "hello world"
+        assert utt.audible == "hello world"
 
-    def test_utterance_raw_none_tokens(self):
+    def test_utterance_audible_none_tokens(self):
         utt = Utterance()
-        assert utt.raw is None
+        assert utt.audible is None
 
 
 class TestTokens:
@@ -608,21 +609,65 @@ class TestFromDir:
             )
 
     def test_testchat_bad_files_catch_errors(self, testchat_bad_dir):
-        """Report which testchat/bad files did not raise a parsing error."""
+        """Every testchat/bad file must raise a parsing error with strict=True."""
+        # Files requiring complex cross-tier or context-dependent checks
+        # not yet implemented (Tier 3+4 validation rules).
+        known_exceptions = {
+            # Cross-tier checks (%mor, %gra, %pho):
+            "mor-commas.cha",
+            "mor-empty.cha",
+            "latetalkers.cha",
+            "mornumber-spanish.cha",
+            "mornumber-spanish-2.cha",
+            "pho-group-compound.cha",
+            "pho-repetition.cha",
+            "pho-repetition-bad.cha",
+            # Media status vs bullet validation:
+            "media-needs-bullets.cha",
+            "media-notrans-bullets.cha",
+            "media-unlinked-bullets.cha",
+            # Retrace followed-by-content checks:
+            "retrace-in-group-bad.cha",
+            "retrace-multiple-no-following.cha",
+            "retrace-no-following-content.cha",
+            # Quotation nesting:
+            "quotation-nested.cha",
+            # Language-level checks:
+            "language-different-speakers.cha",
+            "zho-f.cha",
+            # CA segment repetition:
+            "ca-segment-repetition.cha",
+            "ca-segment-repetition-bad-content.cha",
+            # [x N] bracket context:
+            "repetition.cha",
+            "grouprepetition.cha",
+            "x-repetition.cha",
+            # @Options sign/heritage/bullet required:
+            "sign.cha",
+            "words-sign.cha",
+            "heritage.cha",
+            "heritage-lsfal14a.cha",
+            "bs5.cha",
+            # Participant code edge cases:
+            "who.cha",
+            # Other:
+            "zero-others.cha",
+            "space-bracket.cha",
+        }
         no_error_files = []
         for path in sorted(testchat_bad_dir.glob("*.cha")):
+            if path.name in known_exceptions:
+                continue
             try:
                 CHAT.from_files([str(path)], strict=True)
             except Exception:
                 pass
             else:
                 no_error_files.append(path.name)
-        if no_error_files:
-            file_list = "\n".join(no_error_files)
-            warnings.warn(
-                f"testchat/bad files that raised no parsing error:\n\n{file_list}",
-                stacklevel=1,
-            )
+        assert not no_error_files, (
+            f"{len(no_error_files)} testchat/bad files that raised no parsing error:\n"
+            + "\n".join(no_error_files)
+        )
 
     def test_private_data_strict_compliance(self, private_data_dir):
         """Report which private test data files would fail strict=True."""
@@ -1162,7 +1207,19 @@ class TestHeaders:
     def test_date(self):
         reader = CHAT.from_strs([HEADER_CHAT])
         h = reader.headers()[0]
-        assert h.date == "25-JAN-1983"
+        assert h.date == datetime.date(1983, 1, 25)
+
+    def test_date_iso(self):
+        chat_str = HEADER_CHAT.replace("25-JAN-1983", "1983-01-25")
+        reader = CHAT.from_strs([chat_str])
+        h = reader.headers()[0]
+        assert h.date == datetime.date(1983, 1, 25)
+
+    def test_date_unparseable(self):
+        chat_str = HEADER_CHAT.replace("25-JAN-1983", "not-a-date")
+        reader = CHAT.from_strs([chat_str])
+        h = reader.headers()[0]
+        assert h.date is None
 
     def test_location(self):
         reader = CHAT.from_strs([HEADER_CHAT])
@@ -2122,3 +2179,78 @@ class TestIPSyn:
         result = reader.ipsyn()[0]
         # S4(2) + S2(2) + S3(2) + S1(2) + N1(2) + N2(2) + V1(2) = 14 minimum
         assert result >= 14
+
+
+# ---------------------------------------------------------------------------
+# Tests for mor_tier / gra_tier kwargs
+# ---------------------------------------------------------------------------
+
+CHAT_WITH_XMOR = (
+    "@UTF8\n"
+    "@Begin\n"
+    "@Participants:\tCHI Child\n"
+    "*CHI:\tI want cookie .\n"
+    "%xmor:\tpro|I v|want n|cookie .\n"
+    "%xgra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n"
+    "@End\n"
+)
+
+
+class TestMorGraTierKwargs:
+    def test_custom_tier_names(self):
+        reader = CHAT.from_strs([CHAT_WITH_XMOR], mor_tier="xmor", gra_tier="xgra")
+        tokens = reader.tokens()
+        assert tokens[0].pos == "pro"
+        assert tokens[0].mor == "I"
+        assert tokens[0].gra == Gra(dep=1, head=2, rel="SUBJ")
+
+    def test_custom_tiers_default_ignores(self):
+        """Default tiers should not pick up %xmor/%xgra data."""
+        reader = CHAT.from_strs([CHAT_WITH_XMOR])
+        tokens = reader.tokens()
+        assert tokens[0].mor is None
+        assert tokens[0].gra is None
+
+    def test_none_mor_disables_both(self):
+        reader = CHAT.from_strs([BASIC_CHAT], mor_tier=None)
+        tokens = reader.tokens()
+        assert tokens[0].mor is None
+        assert tokens[0].gra is None
+
+    def test_none_gra_disables_both(self):
+        reader = CHAT.from_strs([BASIC_CHAT], gra_tier=None)
+        tokens = reader.tokens()
+        assert tokens[0].mor is None
+        assert tokens[0].gra is None
+
+    def test_both_none_disables(self):
+        reader = CHAT.from_strs([BASIC_CHAT], mor_tier=None, gra_tier=None)
+        tokens = reader.tokens()
+        assert tokens[0].mor is None
+        assert tokens[0].gra is None
+
+    def test_utterance_tier_names_custom(self):
+        reader = CHAT.from_strs([CHAT_WITH_XMOR], mor_tier="xmor", gra_tier="xgra")
+        utts = reader.utterances()
+        assert utts[0].mor_tier_name == "%xmor"
+        assert utts[0].gra_tier_name == "%xgra"
+
+    def test_utterance_tier_names_default(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        assert utts[0].mor_tier_name == "%mor"
+        assert utts[0].gra_tier_name == "%gra"
+
+    def test_utterance_tier_names_disabled(self):
+        reader = CHAT.from_strs([BASIC_CHAT], mor_tier=None, gra_tier=None)
+        utts = reader.utterances()
+        assert utts[0].mor_tier_name is None
+        assert utts[0].gra_tier_name is None
+
+    def test_to_strs_roundtrip_custom_tiers(self):
+        reader = CHAT.from_strs([CHAT_WITH_XMOR], mor_tier="xmor", gra_tier="xgra")
+        strs = reader.to_strs()
+        assert "%xmor:" in strs[0]
+        assert "%xgra:" in strs[0]
+        assert "%mor:" not in strs[0]
+        assert "%gra:" not in strs[0]

@@ -2,11 +2,9 @@
 
 use super::bmes::{bmes_to_words, words_to_bmes};
 use crate::hmm::{BaseHiddenMarkovModel, HiddenMarkovModel};
-use crate::persistence::{ModelError, pathbuf_to_string};
-use crate::seq_feature::{SeqFeatureTemplate, default_segmenter_hmm_features, validate_templates};
-use pyo3::prelude::*;
+use crate::persistence::ModelError;
+use crate::seq_feature::{SeqFeatureTemplate, default_segmenter_hmm_features};
 use std::io::{Read, Write};
-use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -118,6 +116,28 @@ pub trait BaseHiddenMarkovModelSegmenter: Sized + Clone {
         self.hmm_mut().load_from_reader(reader)
     }
 
+    /// Compute log-likelihood of segmented sentences under the model.
+    ///
+    /// Each sentence is a list of words (same format as `fit_segmented` input).
+    /// Returns one log-likelihood per sentence using the Forward algorithm.
+    fn score(&self, sents: Vec<Vec<String>>) -> Result<Vec<f64>, ModelError> {
+        if !self.hmm().fitted() {
+            return Err(ModelError::ValidationError(
+                "Model has not been fitted yet.".to_string(),
+            ));
+        }
+        let sequences: Vec<Vec<String>> = sents
+            .iter()
+            .map(|sent| {
+                sent.iter()
+                    .flat_map(|w| w.chars())
+                    .map(|c| c.to_string())
+                    .collect()
+            })
+            .collect();
+        self.hmm().score(sequences)
+    }
+
     /// Segment unsegmented sentence strings.
     fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
         if sent_strs.is_empty() {
@@ -157,6 +177,12 @@ pub trait BaseHiddenMarkovModelSegmenter: Sized + Clone {
                 bmes_to_words(chars, &tags)
             })
             .collect()
+    }
+
+    /// Segment unsegmented sentences and return words with character offsets.
+    fn predict_with_offsets(&self, sent_strs: Vec<String>) -> Vec<Vec<(String, (usize, usize))>> {
+        let words = self.predict(sent_strs);
+        crate::wordseg::attach_offsets(words)
     }
 }
 
@@ -219,85 +245,6 @@ impl HiddenMarkovModelSegmenter {
             )
             .unwrap(),
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed wrapper. Python users see this as `HiddenMarkovModelSegmenter`.
-#[pyclass(name = "HiddenMarkovModelSegmenter", from_py_object)]
-#[derive(Clone)]
-pub struct PyHiddenMarkovModelSegmenter {
-    pub inner: HiddenMarkovModelSegmenter,
-}
-
-impl BaseHiddenMarkovModelSegmenter for PyHiddenMarkovModelSegmenter {
-    fn hmm(&self) -> &HiddenMarkovModel {
-        self.inner.hmm()
-    }
-    fn hmm_mut(&mut self) -> &mut HiddenMarkovModel {
-        self.inner.hmm_mut()
-    }
-    fn from_hmm(hmm: HiddenMarkovModel) -> Self {
-        Self {
-            inner: HiddenMarkovModelSegmenter::from_hmm(hmm),
-        }
-    }
-}
-
-#[pymethods]
-impl PyHiddenMarkovModelSegmenter {
-    /// Initialize an HMM-based word segmenter.
-    #[new]
-    #[pyo3(signature = (*, n_iter=None, tolerance=None, gamma=None, random_seed=None, features=None))]
-    fn new(
-        n_iter: Option<usize>,
-        tolerance: Option<f64>,
-        gamma: Option<f64>,
-        random_seed: Option<u64>,
-        features: Option<Vec<SeqFeatureTemplate>>,
-    ) -> PyResult<Self> {
-        if let Some(g) = gamma
-            && g <= 0.0
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "gamma must be > 0: {}",
-                g
-            )));
-        }
-        if let Some(ref f) = features {
-            validate_templates(f, false).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        }
-        Ok(Self {
-            inner: HiddenMarkovModelSegmenter::new(n_iter, tolerance, gamma, random_seed, features),
-        })
-    }
-
-    /// Train the model with supervised segmented sentences.
-    fn fit_segmented(&mut self, sents: Vec<Vec<String>>) {
-        BaseHiddenMarkovModelSegmenter::fit_segmented(self, sents);
-    }
-
-    /// Train the model with unsupervised unsegmented sentences (Baum-Welch EM).
-    fn fit_unsegmented(&mut self, sent_strs: Vec<String>) {
-        BaseHiddenMarkovModelSegmenter::fit_unsegmented(self, sent_strs);
-    }
-
-    /// Segment the given unsegmented sentences.
-    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        BaseHiddenMarkovModelSegmenter::predict(self, sent_strs)
-    }
-
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        Ok(self.save_to_path(&path)?)
-    }
-
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        Ok(self.load_from_path(&path)?)
     }
 }
 
@@ -457,6 +404,62 @@ mod tests {
         segmenter.fit_unsegmented(vec![]);
         let after = segmenter.predict(vec!["你好世界".into()]);
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_score_not_fitted() {
+        let segmenter = HiddenMarkovModelSegmenter::new(None, None, None, None, None);
+        let result = segmenter.score(vec![vec!["你好".into(), "世界".into()]]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_score_empty_input() {
+        let mut segmenter = HiddenMarkovModelSegmenter::new(None, None, None, None, None);
+        segmenter.fit_segmented(training_data());
+        let result = segmenter.score(vec![]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_score_returns_finite_values() {
+        let mut segmenter = HiddenMarkovModelSegmenter::new(None, None, None, None, None);
+        segmenter.fit_segmented(training_data());
+        let scores = segmenter
+            .score(vec![
+                vec!["你好".into(), "世界".into()],
+                vec!["我".into(), "喜歡".into(), "你".into()],
+            ])
+            .unwrap();
+        assert_eq!(scores.len(), 2);
+        for s in &scores {
+            assert!(s.is_finite(), "score should be finite, got {}", s);
+        }
+    }
+
+    #[test]
+    fn test_score_training_vs_arbitrary() {
+        let mut segmenter = HiddenMarkovModelSegmenter::new(None, None, None, None, None);
+        segmenter.fit_segmented(training_data());
+        // Training-data segmentation.
+        let good = segmenter
+            .score(vec![vec!["你好".into(), "世界".into()]])
+            .unwrap()[0];
+        // Arbitrary segmentation of the same characters.
+        let bad = segmenter
+            .score(vec![vec!["你".into(), "好世".into(), "界".into()]])
+            .unwrap()[0];
+        // Both should be finite (Forward algorithm sums over all state paths,
+        // so the score depends on the character sequence, not the segmentation).
+        assert!(good.is_finite());
+        assert!(bad.is_finite());
+        // The character sequence is the same, so scores should be equal.
+        assert!(
+            (good - bad).abs() < 1e-10,
+            "same char sequence should give same score: {} vs {}",
+            good,
+            bad
+        );
     }
 
     #[test]

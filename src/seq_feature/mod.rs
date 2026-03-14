@@ -4,10 +4,19 @@
 //! each model sees, plus extraction functions used by both averaged perceptron
 //! and HMM models.
 
+#[cfg(feature = "pyo3")]
+mod py;
+
+#[cfg(feature = "pyo3")]
+use pyo3::prelude::*;
 use std::borrow::Cow;
 
-use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::persistence::ModelError;
+
+#[cfg(feature = "pyo3")]
+pub(crate) use py::register_module;
 
 // ---------------------------------------------------------------------------
 // Sentinel constants for boundary positions
@@ -64,7 +73,7 @@ pub(crate) enum SeqFeatureKind {
 ///
 /// Specifies what to extract (observation or label), at which relative
 /// positions, and with what transform.
-#[pyclass(name = "SeqFeatureTemplate", from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(name = "SeqFeatureTemplate", from_py_object))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SeqFeatureTemplate {
     pub(crate) kind: SeqFeatureKind,
@@ -405,103 +414,37 @@ pub fn default_tagger_hmm_features() -> Vec<SeqFeatureTemplate> {
 pub fn validate_templates(
     templates: &[SeqFeatureTemplate],
     allow_labels: bool,
-) -> Result<(), String> {
+) -> Result<(), ModelError> {
     for template in templates {
         if template.positions.is_empty() {
-            return Err("Feature template must have at least one position.".to_string());
+            return Err(ModelError::ValidationError(
+                "Feature template must have at least one position.".to_string(),
+            ));
         }
         for &pos in &template.positions {
             if !(-4..=4).contains(&pos) {
-                return Err(format!("Position {} is out of range [-4, +4].", pos));
+                return Err(ModelError::ValidationError(format!(
+                    "Position {} is out of range [-4, +4].",
+                    pos
+                )));
             }
         }
         if template.is_label() {
             if !allow_labels {
-                return Err(
+                return Err(ModelError::ValidationError(
                     "Label features (seq_label) are not supported for HMM models.".to_string(),
-                );
+                ));
             }
             for &pos in &template.positions {
                 if pos >= 0 {
-                    return Err(format!(
+                    return Err(ModelError::ValidationError(format!(
                         "seq_label positions must be negative (look back only), got {}.",
                         pos
-                    ));
+                    )));
                 }
             }
         }
     }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 factory functions
-// ---------------------------------------------------------------------------
-
-/// Create an observation feature template.
-#[pyfunction]
-#[pyo3(signature = (*positions, transform=None))]
-fn seq_obs(positions: Vec<i32>, transform: Option<&str>) -> PyResult<SeqFeatureTemplate> {
-    if positions.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "seq_obs() requires at least one position.",
-        ));
-    }
-    for &pos in &positions {
-        if !(-4..=4).contains(&pos) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Position {} is out of range [-4, +4].",
-                pos
-            )));
-        }
-    }
-    let transform = match transform {
-        None => SeqTransform::Identity,
-        Some("first_char") => SeqTransform::FirstChar,
-        Some("final_char") => SeqTransform::FinalChar,
-        Some(other) => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown transform '{}'. Use 'first_char' or 'final_char'.",
-                other
-            )));
-        }
-    };
-    Ok(SeqFeatureTemplate::obs(&positions, transform))
-}
-
-/// Create a label feature template.
-#[pyfunction]
-#[pyo3(signature = (*positions))]
-fn seq_label(positions: Vec<i32>) -> PyResult<SeqFeatureTemplate> {
-    if positions.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "seq_label() requires at least one position.",
-        ));
-    }
-    for &pos in &positions {
-        if !(-4..=4).contains(&pos) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Position {} is out of range [-4, +4].",
-                pos
-            )));
-        }
-        if pos >= 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "seq_label positions must be negative (look back only), got {}.",
-                pos
-            )));
-        }
-    }
-    Ok(SeqFeatureTemplate::label(&positions))
-}
-
-/// Register the feature submodule with Python.
-pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let seq_feature_module = PyModule::new(parent_module.py(), "seq_feature")?;
-    seq_feature_module.add_class::<SeqFeatureTemplate>()?;
-    seq_feature_module.add_function(wrap_pyfunction!(seq_obs, &seq_feature_module)?)?;
-    seq_feature_module.add_function(wrap_pyfunction!(seq_label, &seq_feature_module)?)?;
-    parent_module.add_submodule(&seq_feature_module)?;
     Ok(())
 }
 

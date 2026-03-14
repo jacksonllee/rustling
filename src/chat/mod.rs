@@ -6,22 +6,33 @@
 
 mod clean_utterance;
 pub(crate) mod header;
+#[cfg(feature = "pyo3")]
+mod header_py;
 mod ipsyn;
 mod reader;
+#[cfg(feature = "pyo3")]
+mod reader_py;
 mod utterance;
+#[cfg(feature = "pyo3")]
+mod utterance_py;
+pub(crate) mod validation;
 
 pub use header::{Age, ChangeableHeader, Headers, Participant};
 pub use reader::{
-    BaseChat, BasePyChat, Chat, ChatError, ChatFile, MisalignmentInfo, PyChat, WriteError,
-    filter_file_paths, serialize_chat_file,
+    BaseChat, Chat, ChatError, ChatFile, MisalignmentInfo, WriteError, filter_file_paths,
+    serialize_chat_file,
 };
-pub use utterance::{
-    BaseToken, BaseUtterance, Gra, PyToken, PyUtterance, PyUtterances, Token, Utterance, Utterances,
-};
+#[cfg(feature = "pyo3")]
+pub use reader_py::{BasePyChat, PyChat};
+pub use utterance::{BaseToken, BaseUtterance, Gra, Token, Utterance, Utterances};
+#[cfg(feature = "pyo3")]
+pub use utterance_py::{PyToken, PyUtterance, PyUtterances};
 
+#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 
 /// Register the chat submodule with Python.
+#[cfg(feature = "pyo3")]
 pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
     let chat_module = PyModule::new(parent_module.py(), "chat")?;
     chat_module.add_class::<PyChat>()?;

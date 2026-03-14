@@ -14,6 +14,10 @@
 # chat module
 rustling.chat.Age
 rustling.chat.CHAT
+rustling.chat.CHAT.from_dir
+rustling.chat.CHAT.from_files
+rustling.chat.CHAT.from_strs
+rustling.chat.CHAT.from_zip
 rustling.chat.CHAT.ipsyn
 rustling.chat.CHAT.mlu
 rustling.chat.CHAT.mlum

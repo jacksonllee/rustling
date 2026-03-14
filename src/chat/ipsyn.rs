@@ -1657,6 +1657,8 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         }
     }
 
@@ -1756,6 +1758,8 @@ mod tests {
             time_marks: None,
             tiers: None,
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         };
         let result = ipsyn_for_file(&[&utt]);
         assert_eq!(result, 0);

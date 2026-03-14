@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -16,14 +17,31 @@ pub enum ModelError {
     FileNotFound(String),
     /// Parse error (corrupted model file).
     ParseError(String),
+    /// Validation error (invalid parameters).
+    ValidationError(String),
 }
 
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelError::Io(msg) => write!(f, "I/O error: {msg}"),
+            ModelError::FileNotFound(msg) => write!(f, "File not found: {msg}"),
+            ModelError::ParseError(msg) => write!(f, "Parse error: {msg}"),
+            ModelError::ValidationError(msg) => write!(f, "Validation error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ModelError {}
+
+#[cfg(feature = "pyo3")]
 impl From<ModelError> for PyErr {
     fn from(e: ModelError) -> PyErr {
         match e {
             ModelError::Io(msg) => pyo3::exceptions::PyIOError::new_err(msg),
             ModelError::FileNotFound(msg) => pyo3::exceptions::PyFileNotFoundError::new_err(msg),
             ModelError::ParseError(msg) => pyo3::exceptions::PyEnvironmentError::new_err(msg),
+            ModelError::ValidationError(msg) => pyo3::exceptions::PyValueError::new_err(msg),
         }
     }
 }
@@ -54,9 +72,17 @@ pub(crate) fn flatbuffers_verifier_opts() -> flatbuffers::VerifierOptions {
 }
 
 /// Convert a [`PathBuf`] to a UTF-8 [`String`], or return a Python error.
+#[cfg(feature = "pyo3")]
 pub(crate) fn pathbuf_to_string(path: PathBuf) -> PyResult<String> {
     path.into_os_string().into_string().map_err(|os_str| {
         pyo3::exceptions::PyValueError::new_err(format!("Path is not valid UTF-8: {:?}", os_str))
+    })
+}
+
+/// Convert a [`PathBuf`] to a UTF-8 [`String`], or return a [`ModelError`].
+pub fn pathbuf_to_string_result(path: PathBuf) -> Result<String, ModelError> {
+    path.into_os_string().into_string().map_err(|os_str| {
+        ModelError::ValidationError(format!("Path is not valid UTF-8: {:?}", os_str))
     })
 }
 
@@ -65,7 +91,7 @@ pub(crate) fn pathbuf_to_string(path: PathBuf) -> PyResult<String> {
 // ---------------------------------------------------------------------------
 
 /// Write `data` to `path` with zstd compression (level 19).
-pub(crate) fn save_zstd(path: &str, data: &[u8]) -> Result<(), ModelError> {
+pub fn save_zstd(path: &str, data: &[u8]) -> Result<(), ModelError> {
     let file = std::fs::File::create(path)
         .map_err(|e| ModelError::Io(format!("Failed to create file: {e}")))?;
     let mut encoder = zstd::Encoder::new(file, 19)
@@ -80,7 +106,7 @@ pub(crate) fn save_zstd(path: &str, data: &[u8]) -> Result<(), ModelError> {
 }
 
 /// Read and decompress a zstd-compressed file, returning the raw bytes.
-pub(crate) fn load_zstd(path: &str, model_desc: &str) -> Result<Vec<u8>, ModelError> {
+pub fn load_zstd(path: &str, model_desc: &str) -> Result<Vec<u8>, ModelError> {
     let file = std::fs::File::open(path)
         .map_err(|_| ModelError::FileNotFound(format!("Can't locate {model_desc} {path}")))?;
     let decoder = zstd::Decoder::new(file)

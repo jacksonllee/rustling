@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Sequence
+from typing import Literal, Sequence, overload
 
 from rustling.seq_feature import SeqFeatureTemplate
 
@@ -58,14 +58,48 @@ class DAGHMMSegmenter:
         """
         ...
 
-    def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
+    def score(self, sents: Sequence[Sequence[str]]) -> list[float]:
+        """Compute log-likelihood of segmented sentences under the model.
+
+        Uses the Forward algorithm on the HMM component.
+
+        Args:
+            sents: Segmented sentences (each sentence is a sequence of words).
+
+        Returns:
+            Log-likelihood for each sentence.
+
+        Raises:
+            ValueError: If the model has not been fitted.
+        """
+        ...
+
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[False] = False
+    ) -> list[list[str]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[True]
+    ) -> list[list[tuple[str, tuple[int, int]]]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]: ...
+    def predict(  # type: ignore[misc]
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]:
         """Segment the given unsegmented sentences.
 
         Args:
             sent_strs: An iterable of unsegmented sentences.
+            offsets: If True, return each word as a tuple of
+                ``(word, (start, end))`` where start and end are
+                character indices (exclusive end, like Python slices).
 
         Returns:
-            A list of segmented sentences.
+            A list of segmented sentences. When *offsets* is True,
+            each word is a ``(word, (start, end))`` tuple.
         """
         ...
 
@@ -165,14 +199,48 @@ class HiddenMarkovModelSegmenter:
         """
         ...
 
-    def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
+    def score(self, sents: Sequence[Sequence[str]]) -> list[float]:
+        """Compute log-likelihood of segmented sentences under the model.
+
+        Uses the Forward algorithm on the underlying HMM.
+
+        Args:
+            sents: Segmented sentences (each sentence is a sequence of words).
+
+        Returns:
+            Log-likelihood for each sentence.
+
+        Raises:
+            ValueError: If the model has not been fitted.
+        """
+        ...
+
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[False] = False
+    ) -> list[list[str]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[True]
+    ) -> list[list[tuple[str, tuple[int, int]]]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]: ...
+    def predict(  # type: ignore[misc]
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]:
         """Segment the given unsegmented sentences.
 
         Args:
             sent_strs: An iterable of unsegmented sentences.
+            offsets: If True, return each word as a tuple of
+                ``(word, (start, end))`` where start and end are
+                character indices (exclusive end, like Python slices).
 
         Returns:
-            A list of segmented sentences.
+            A list of segmented sentences. When *offsets* is True,
+            each word is a ``(word, (start, end))`` tuple.
         """
         ...
 
@@ -227,14 +295,32 @@ class LongestStringMatching:
         """
         ...
 
-    def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[False] = False
+    ) -> list[list[str]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[True]
+    ) -> list[list[tuple[str, tuple[int, int]]]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]: ...
+    def predict(  # type: ignore[misc]
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]:
         """Segment the given unsegmented sentences.
 
         Args:
             sent_strs: An iterable of unsegmented sentences.
+            offsets: If True, return each word as a tuple of
+                ``(word, (start, end))`` where start and end are
+                character indices (exclusive end, like Python slices).
 
         Returns:
-            A list of segmented sentences.
+            A list of segmented sentences. When *offsets* is True,
+            each word is a ``(word, (start, end))`` tuple.
         """
         ...
 
@@ -275,14 +361,32 @@ class RandomSegmenter:
         """
         ...
 
-    def predict(self, sent_strs: Sequence[str]) -> list[list[str]]:
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[False] = False
+    ) -> list[list[str]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: Literal[True]
+    ) -> list[list[tuple[str, tuple[int, int]]]]: ...
+    @overload
+    def predict(
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]: ...
+    def predict(  # type: ignore[misc]
+        self, sent_strs: Sequence[str], *, offsets: bool = False
+    ) -> list[list[str]] | list[list[tuple[str, tuple[int, int]]]]:
         """Segment the given unsegmented sentences.
 
         Args:
             sent_strs: An iterable of unsegmented sentences.
+            offsets: If True, return each word as a tuple of
+                ``(word, (start, end))`` where start and end are
+                character indices (exclusive end, like Python slices).
 
         Returns:
-            A list of segmented sentences.
+            A list of segmented sentences. When *offsets* is True,
+            each word is a ``(word, (start, end))`` tuple.
         """
         ...
 

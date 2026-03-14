@@ -113,3 +113,45 @@ def test_fit_empty_data():
     """Test fitting with empty training data."""
     segmenter = HiddenMarkovModelSegmenter()
     segmenter.fit_segmented([])
+
+
+def test_predict_offsets():
+    """Test predict with offsets=True returns (word, (start, end)) tuples."""
+    segmenter = HiddenMarkovModelSegmenter()
+    training_data = [["你好", "世界"]] * 20
+    segmenter.fit_segmented(training_data)
+    input_str = "你好世界"
+    result = segmenter.predict([input_str], offsets=True)
+    assert len(result) == 1
+    for word, (start, end) in result[0]:
+        assert input_str[start:end] == word
+
+
+def test_predict_offsets_false_unchanged():
+    """Test that offsets=False returns plain strings."""
+    segmenter = HiddenMarkovModelSegmenter()
+    training_data = [["你好", "世界"]] * 20
+    segmenter.fit_segmented(training_data)
+    result = segmenter.predict(["你好世界"], offsets=False)
+    assert all(isinstance(w, str) for w in result[0])
+
+
+def test_predict_offsets_default_unchanged():
+    """Test that default (no offsets kwarg) returns plain strings."""
+    segmenter = HiddenMarkovModelSegmenter()
+    training_data = [["你好", "世界"]] * 20
+    segmenter.fit_segmented(training_data)
+    result = segmenter.predict(["你好世界"])
+    assert all(isinstance(w, str) for w in result[0])
+
+
+def test_predict_offsets_empty():
+    """Test predict with offsets=True on empty input."""
+    segmenter = HiddenMarkovModelSegmenter()
+    assert segmenter.predict([], offsets=True) == []
+
+
+def test_predict_offsets_empty_string():
+    """Test predict with offsets=True on empty string."""
+    segmenter = HiddenMarkovModelSegmenter()
+    assert segmenter.predict([""], offsets=True) == [[]]

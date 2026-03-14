@@ -91,3 +91,39 @@ def test_multiple_sentences():
     model.fit([["the", "cat"]])
     result = model.predict(["thecat", "catthe", "the"])
     assert result == [["the", "cat"], ["cat", "the"], ["the"]]
+
+
+def test_predict_offsets():
+    """Test predict with offsets=True."""
+    model = LongestStringMatching(max_word_length=4)
+    model.fit([["你好", "世界"]])
+    input_str = "你好世界"
+    result = model.predict([input_str], offsets=True)
+    assert result == [[("你好", (0, 2)), ("世界", (2, 4))]]
+
+
+def test_predict_offsets_ascii():
+    """Test predict with offsets=True for ASCII input."""
+    model = LongestStringMatching(max_word_length=4)
+    model.fit([["this", "is"]])
+    input_str = "thisis"
+    result = model.predict([input_str], offsets=True)
+    assert len(result) == 1
+    for word, (start, end) in result[0]:
+        assert input_str[start:end] == word
+
+
+def test_predict_offsets_false_unchanged():
+    """Test that offsets=False returns plain strings."""
+    model = LongestStringMatching(max_word_length=4)
+    model.fit([["hello", "world"]])
+    result = model.predict(["helloworld"], offsets=False)
+    assert all(isinstance(w, str) for w in result[0])
+
+
+def test_predict_offsets_empty():
+    """Test predict with offsets=True on empty input."""
+    model = LongestStringMatching(max_word_length=4)
+    model.fit([])
+    assert model.predict([], offsets=True) == []
+    assert model.predict([""], offsets=True) == [[]]

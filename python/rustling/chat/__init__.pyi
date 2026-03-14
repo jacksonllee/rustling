@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Literal, Sequence, overload
@@ -76,8 +77,12 @@ class Headers:
     """Options from @Options."""
     media: dict[str, str | None] | None
     """Media descriptor from @Media as a dict with keys "filename", "format", and "status"."""
-    date: str | None
-    """Date from @Date."""
+    date: datetime.date | None
+    """Date from @Date, parsed as a date object.
+
+    The CHAT format ``DD-MMM-YYYY`` (e.g., ``25-JAN-1983``) is tried first,
+    then ISO ``YYYY-MM-DD``.  If neither format matches, the value is ``None``.
+    """
     location: str | None
     """Location from @Location."""
     number: str | None
@@ -214,14 +219,20 @@ class Utterance:
     """Speaker code (e.g., "CHI", "MOT"), or None for headers."""
     tokens: list[Token] | None
     """List of tokens in this utterance, or None for headers."""
-    raw: str | None
-    """Raw transcript of this utterance, or None for headers."""
+    audible: str | None
+    """Audibly faithful transcript of this utterance, or None for headers."""
     time_marks: tuple[int, int] | None
     """Start and end timestamps in milliseconds."""
     tiers: dict[str, str] | None
     """Raw tier data including the main tier and dependent tiers, or None for headers."""
     changeable_header: ChangeableHeader | None
     """The header variant if this is a changeable header, or None for real utterances."""
+    mor_tier_name: str | None
+    """The %-prefixed tier name used as the morphology tier (e.g., "%mor", "%xmor"),
+    or None if mor+gra handling was disabled."""
+    gra_tier_name: str | None
+    """The %-prefixed tier name used as the grammatical relation tier (e.g., "%gra"),
+    or None if mor+gra handling was disabled."""
 
     def __init__(
         self,
@@ -231,6 +242,8 @@ class Utterance:
         time_marks: tuple[int, int] | None = None,
         tiers: dict[str, str] | None = None,
         changeable_header: ChangeableHeader | None = None,
+        mor_tier_name: str | None = "%mor",
+        gra_tier_name: str | None = "%gra",
     ) -> None: ...
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
@@ -281,6 +294,8 @@ class CHAT:
         ids: Sequence[str] | None = None,
         parallel: bool = True,
         strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
     ) -> CHAT:
         """Parse CHAT data from in-memory strings.
 
@@ -293,6 +308,12 @@ class CHAT:
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier, e.g. ``"%mor"`` or ``"%xmor"``.
+                Set to None to disable mor+gra handling.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier, e.g. ``"%gra"`` or ``"%xgra"``.
+                Set to None to disable mor+gra handling.
 
         Returns:
             A new CHAT reader with the parsed data.
@@ -310,6 +331,8 @@ class CHAT:
         *,
         parallel: bool = True,
         strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
     ) -> CHAT:
         """Load CHAT data from file paths.
 
@@ -320,6 +343,12 @@ class CHAT:
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier, e.g. ``"%mor"`` or ``"%xmor"``.
+                Set to None to disable mor+gra handling.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier, e.g. ``"%gra"`` or ``"%xgra"``.
+                Set to None to disable mor+gra handling.
 
         Returns:
             A new CHAT reader with the parsed data.
@@ -339,6 +368,8 @@ class CHAT:
         extension: str = ".cha",
         parallel: bool = True,
         strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
     ) -> CHAT:
         """Recursively load CHAT data from a directory.
 
@@ -351,6 +382,12 @@ class CHAT:
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier, e.g. ``"%mor"`` or ``"%xmor"``.
+                Set to None to disable mor+gra handling.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier, e.g. ``"%gra"`` or ``"%xgra"``.
+                Set to None to disable mor+gra handling.
 
         Returns:
             A new CHAT reader with the parsed data.
@@ -370,6 +407,8 @@ class CHAT:
         extension: str = ".cha",
         parallel: bool = True,
         strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
     ) -> CHAT:
         """Load CHAT data from a ZIP archive.
 
@@ -382,6 +421,12 @@ class CHAT:
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier, e.g. ``"%mor"`` or ``"%xmor"``.
+                Set to None to disable mor+gra handling.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier, e.g. ``"%gra"`` or ``"%xgra"``.
+                Set to None to disable mor+gra handling.
 
         Returns:
             A new CHAT reader with the parsed data.

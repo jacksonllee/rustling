@@ -1,26 +1,24 @@
 //! CHAT data reader for CHILDES/TalkBank transcripts.
 
+#[cfg(feature = "pyo3")]
+use super::utterance_py::{PyToken, PyUtterance};
 use crate::chat::clean_utterance::clean_utterance;
 use crate::chat::header::{
     Age, ChangeableHeader, Headers, Participant, parse_changeable, parse_file_headers,
     split_header_line,
 };
-use crate::chat::utterance::{
-    BaseUtterance, Gra, PyToken, PyUtterance, PyUtterances, Token, Utterance, Utterances,
-};
-use crate::ngram::{BaseNgrams, Ngrams, PyNgrams};
+use crate::chat::utterance::{BaseUtterance, Gra, Token, Utterance, Utterances};
+#[cfg(feature = "pyo3")]
+use pyo3::prelude::*;
 
 use fancy_regex::Regex as FancyRegex;
-use pyo3::prelude::*;
-use pyo3::types::{PySlice, PyType};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use regex::Regex;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::LazyLock;
+#[cfg(feature = "pyo3")]
+use std::sync::{Arc, OnceLock};
 
 static TIME_MARKS_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\x15-?(\d+)_(\d+)-?\x15").unwrap());
@@ -37,9 +35,11 @@ pub struct ChatFile {
     /// Raw joined lines (headers, utterances, dependent tiers) for serialization.
     pub raw_lines: Vec<String>,
     /// Lazy cache of Python Utterance objects.
-    py_utterances: Arc<OnceLock<Vec<Py<PyUtterance>>>>,
+    #[cfg(feature = "pyo3")]
+    pub(crate) py_utterances: Arc<OnceLock<Vec<Py<PyUtterance>>>>,
     /// Lazy cache of Python Token objects, grouped per real utterance.
-    py_tokens: Arc<OnceLock<Vec<Vec<Py<PyToken>>>>>,
+    #[cfg(feature = "pyo3")]
+    pub(crate) py_tokens: Arc<OnceLock<Vec<Vec<Py<PyToken>>>>>,
 }
 
 impl Clone for ChatFile {
@@ -49,7 +49,9 @@ impl Clone for ChatFile {
             headers: self.headers.clone(),
             events: self.events.clone(),
             raw_lines: self.raw_lines.clone(),
+            #[cfg(feature = "pyo3")]
             py_utterances: Arc::new(OnceLock::new()),
+            #[cfg(feature = "pyo3")]
             py_tokens: Arc::new(OnceLock::new()),
         }
     }
@@ -68,7 +70,9 @@ impl ChatFile {
             headers,
             events,
             raw_lines,
+            #[cfg(feature = "pyo3")]
             py_utterances: Arc::new(OnceLock::new()),
+            #[cfg(feature = "pyo3")]
             py_tokens: Arc::new(OnceLock::new()),
         }
     }
@@ -83,7 +87,7 @@ impl ChatFile {
         self.events.iter().filter(|u| u.changeable_header.is_none())
     }
 
-    fn eq_data(&self, other: &ChatFile) -> bool {
+    pub(crate) fn eq_data(&self, other: &ChatFile) -> bool {
         self.file_path == other.file_path
             && self.headers == other.headers
             && self.events == other.events
@@ -95,38 +99,16 @@ impl ChatFile {
         self.events.is_empty()
     }
 
-    fn cached_py_utterances(&self, py: Python<'_>) -> &[Py<PyUtterance>] {
-        self.py_utterances.get_or_init(|| {
-            self.utterances()
-                .map(|utt| Py::new(py, PyUtterance(utt.clone())).unwrap())
-                .collect()
-        })
-    }
-
-    fn cached_py_tokens(&self, py: Python<'_>) -> &[Vec<Py<PyToken>>] {
-        self.py_tokens.get_or_init(|| {
-            self.real_utterances()
-                .map(|u| {
-                    u.tokens
-                        .as_ref()
-                        .map(|toks| {
-                            toks.iter()
-                                .map(|t| Py::new(py, PyToken(t.clone())).unwrap())
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
-        })
-    }
-
     /// Reset all cached Python objects.
     ///
     /// Call this after mutating `events` (e.g. via participant filtering)
     /// to avoid returning stale cached data.
     pub fn reset_caches(&mut self) {
-        self.py_utterances = Arc::new(OnceLock::new());
-        self.py_tokens = Arc::new(OnceLock::new());
+        #[cfg(feature = "pyo3")]
+        {
+            self.py_utterances = Arc::new(OnceLock::new());
+            self.py_tokens = Arc::new(OnceLock::new());
+        }
     }
 }
 
@@ -157,7 +139,10 @@ pub struct MisalignmentInfo {
     pub file_path: String,
     pub participant: String,
     pub main_tier: String,
-    pub mor_tier: String,
+    /// The `%`-prefixed name of the mor tier (e.g., `"%mor"`, `"%xmor"`).
+    pub mor_tier_name: String,
+    /// The raw content of the mor tier.
+    pub mor_tier_content: String,
     pub word_count: usize,
     pub mor_count: usize,
     pub words: Vec<String>,
@@ -465,6 +450,8 @@ fn build_tokens(
 fn parse_chat_str(
     chat_str: &str,
     parallel: bool,
+    mor_tier: Option<&str>,
+    gra_tier: Option<&str>,
 ) -> (Headers, Vec<Utterance>, Vec<String>, Vec<MisalignmentInfo>) {
     let lines = get_lines(chat_str);
     let (headers, start_idx, _initial_events) = parse_file_headers(&lines);
@@ -484,15 +471,20 @@ fn parse_chat_str(
         tier_groups
             .par_iter()
             .with_min_len(16)
-            .map(|tg| build_utterance(tg))
+            .map(|tg| build_utterance(tg, mor_tier, gra_tier))
             .collect()
     } else {
-        tier_groups.iter().map(|tg| build_utterance(tg)).collect()
+        tier_groups
+            .iter()
+            .map(|tg| build_utterance(tg, mor_tier, gra_tier))
+            .collect()
     };
 
     #[cfg(not(feature = "parallel"))]
-    let results: Vec<(Utterance, Option<MisalignmentInfo>)> =
-        tier_groups.iter().map(|tg| build_utterance(tg)).collect();
+    let results: Vec<(Utterance, Option<MisalignmentInfo>)> = tier_groups
+        .iter()
+        .map(|tg| build_utterance(tg, mor_tier, gra_tier))
+        .collect();
 
     // Split results into utterances and misalignment info.
     let mut utterances = Vec::with_capacity(results.len());
@@ -519,6 +511,8 @@ fn parse_chat_str(
                     time_marks: None,
                     tiers: None,
                     changeable_header: Some(h),
+                    mor_tier_name: None,
+                    gra_tier_name: None,
                 });
             }
         }
@@ -529,9 +523,17 @@ fn parse_chat_str(
 
 /// Build an Utterance from a TierGroup.
 ///
+/// `mor_tier` and `gra_tier` are the `%`-prefixed tier names to use for
+/// morphology and grammatical relations (e.g., `Some("%mor")`, `Some("%xmor")`).
+/// If either is `None`, all mor+gra parsing is disabled.
+///
 /// Returns `(utterance, misalignment)`. `misalignment` is `Some` when
 /// the word count doesn't match the non-clitic mor item count.
-fn build_utterance(group: &TierGroup) -> (Utterance, Option<MisalignmentInfo>) {
+fn build_utterance(
+    group: &TierGroup,
+    mor_tier: Option<&str>,
+    gra_tier: Option<&str>,
+) -> (Utterance, Option<MisalignmentInfo>) {
     // Extract time marks.
     let time_marks = TIME_MARKS_REGEX
         .captures(&group.main_tier)
@@ -545,11 +547,15 @@ fn build_utterance(group: &TierGroup) -> (Utterance, Option<MisalignmentInfo>) {
     let cleaned = clean_utterance(&group.main_tier);
     let words: Vec<&str> = cleaned.split_whitespace().collect();
 
-    // Parse %mor tier.
-    let mor_items = group.dependent_tiers.get("%mor").map(|s| parse_mor_tier(s));
-
-    // Parse %gra tier.
-    let gra_items = group.dependent_tiers.get("%gra").map(|s| parse_gra_tier(s));
+    // If either tier is None, disable both mor+gra parsing.
+    let (mor_items, gra_items) = if let (Some(mt), Some(gt)) = (mor_tier, gra_tier) {
+        (
+            group.dependent_tiers.get(mt).map(|s| parse_mor_tier(s)),
+            group.dependent_tiers.get(gt).map(|s| parse_gra_tier(s)),
+        )
+    } else {
+        (None, None)
+    };
 
     // Build tokens.
     let (tokens, misalignment_counts) =
@@ -560,9 +566,9 @@ fn build_utterance(group: &TierGroup) -> (Utterance, Option<MisalignmentInfo>) {
         file_path: String::new(), // Populated later by the caller.
         participant: group.participant.clone(),
         main_tier: group.main_tier.clone(),
-        mor_tier: group
-            .dependent_tiers
-            .get("%mor")
+        mor_tier_name: mor_tier.unwrap_or("%mor").to_string(),
+        mor_tier_content: mor_tier
+            .and_then(|mt| group.dependent_tiers.get(mt))
             .cloned()
             .unwrap_or_default(),
         word_count: counts.word_count,
@@ -582,6 +588,8 @@ fn build_utterance(group: &TierGroup) -> (Utterance, Option<MisalignmentInfo>) {
             time_marks,
             tiers: Some(tiers),
             changeable_header: None,
+            mor_tier_name: mor_tier.map(|s| s.to_string()),
+            gra_tier_name: gra_tier.map(|s| s.to_string()),
         },
         misalignment,
     )
@@ -591,11 +599,11 @@ fn build_utterance(group: &TierGroup) -> (Utterance, Option<MisalignmentInfo>) {
 pub fn filter_file_paths(
     paths: &[String],
     match_pattern: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ModelError> {
     let match_re = match_pattern
         .map(FancyRegex::new)
         .transpose()
-        .map_err(|e| format!("Invalid match regex: {e}"))?;
+        .map_err(|e| ModelError::ValidationError(format!("Invalid match regex: {e}")))?;
 
     Ok(paths
         .iter()
@@ -609,70 +617,6 @@ pub fn filter_file_paths(
         })
         .cloned()
         .collect())
-}
-
-/// Compile file-path regex patterns from a Python str or iterable of str.
-fn compile_file_patterns(files: &Bound<'_, PyAny>) -> PyResult<Vec<FancyRegex>> {
-    let raw_patterns: Vec<String> = if let Ok(s) = files.extract::<String>() {
-        vec![s]
-    } else if let Ok(v) = files.extract::<Vec<String>>() {
-        v
-    } else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(
-            "files must be a str or iterable of str",
-        ));
-    };
-
-    if raw_patterns.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "files must not be empty",
-        ));
-    }
-
-    raw_patterns
-        .iter()
-        .map(|p| {
-            FancyRegex::new(p).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("Invalid file regex '{p}': {e}"))
-            })
-        })
-        .collect()
-}
-
-/// Compile participant regex patterns from a Python str or iterable of str.
-/// Each pattern is auto-anchored with ^(?:...)$ for full-match semantics.
-fn compile_participant_patterns(participants: &Bound<'_, PyAny>) -> PyResult<Vec<FancyRegex>> {
-    let raw_patterns: Vec<String> = if let Ok(s) = participants.extract::<String>() {
-        vec![s]
-    } else if let Ok(v) = participants.extract::<Vec<String>>() {
-        v
-    } else {
-        return Err(pyo3::exceptions::PyTypeError::new_err(
-            "participants must be a str or iterable of str",
-        ));
-    };
-
-    if raw_patterns.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "participants must not be empty",
-        ));
-    }
-
-    raw_patterns
-        .iter()
-        .map(|p| {
-            let anchored = if p.starts_with('^') || p.ends_with('$') {
-                p.clone()
-            } else {
-                format!("^(?:{p})$")
-            };
-            FancyRegex::new(&anchored).map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "Invalid participant regex '{p}': {e}"
-                ))
-            })
-        })
-        .collect()
 }
 
 /// Filter a ChatFile's events and header participants by regex patterns.
@@ -709,21 +653,17 @@ pub(crate) fn filter_chat_file_by_participants(
 pub(crate) fn parse_chat_strs(
     pairs: Vec<(String, String)>,
     parallel: bool,
+    mor_tier: Option<&str>,
+    gra_tier: Option<&str>,
 ) -> (Vec<ChatFile>, Vec<MisalignmentInfo>) {
     let build = |content: &str, id: &str| {
-        let (headers, events, raw_lines, mut mis) = parse_chat_str(content, parallel);
+        let (headers, events, raw_lines, mut mis) =
+            parse_chat_str(content, parallel, mor_tier, gra_tier);
         for m in &mut mis {
             m.file_path = id.to_string();
         }
         (
-            ChatFile {
-                file_path: id.to_string(),
-                headers,
-                events,
-                raw_lines,
-                py_utterances: Arc::new(OnceLock::new()),
-                py_tokens: Arc::new(OnceLock::new()),
-            },
+            ChatFile::new(id.to_string(), headers, events, raw_lines),
             mis,
         )
     };
@@ -753,22 +693,18 @@ pub(crate) fn parse_chat_strs(
 pub(crate) fn load_chat_files(
     paths: &[String],
     parallel: bool,
+    mor_tier: Option<&str>,
+    gra_tier: Option<&str>,
 ) -> Result<(Vec<ChatFile>, Vec<MisalignmentInfo>), std::io::Error> {
     let build = |path: &str| -> Result<(ChatFile, Vec<MisalignmentInfo>), std::io::Error> {
         let content = std::fs::read_to_string(path)?;
-        let (headers, events, raw_lines, mut mis) = parse_chat_str(&content, parallel);
+        let (headers, events, raw_lines, mut mis) =
+            parse_chat_str(&content, parallel, mor_tier, gra_tier);
         for m in &mut mis {
             m.file_path = path.to_string();
         }
         Ok((
-            ChatFile {
-                file_path: path.to_string(),
-                headers,
-                events,
-                raw_lines,
-                py_utterances: Arc::new(OnceLock::new()),
-                py_tokens: Arc::new(OnceLock::new()),
-            },
+            ChatFile::new(path.to_string(), headers, events, raw_lines),
             mis,
         ))
     };
@@ -814,81 +750,7 @@ pub fn serialize_chat_file(file: &ChatFile) -> String {
 // Misalignment handling
 // ---------------------------------------------------------------------------
 
-/// Check collected misalignments and either raise or warn.
-fn handle_misalignments(
-    misalignments: &[MisalignmentInfo],
-    strict: bool,
-    py: Python<'_>,
-) -> PyResult<()> {
-    if misalignments.is_empty() {
-        return Ok(());
-    }
-
-    if strict {
-        let mut msg = format!(
-            "Found {} utterance(s) with mor/word misalignment:\n",
-            misalignments.len()
-        );
-        for (i, m) in misalignments.iter().enumerate() {
-            msg.push_str(&format!(
-                "\n  {}. File: {}\n     Participant: {}\n     Main tier: {}\n\
-                 \x20    %mor tier: {}\n     Words ({}): {}\n\
-                 \x20    Non-clitic mor items ({}): {}\n",
-                i + 1,
-                m.file_path,
-                m.participant,
-                m.main_tier,
-                m.mor_tier,
-                m.word_count,
-                m.words.join(" "),
-                m.mor_count,
-                m.mor_labels.join(" "),
-            ));
-        }
-        msg.push_str(
-            "\nTo suppress this error and parse with empty tokens for \
-             misaligned utterances, pass strict=False.",
-        );
-        return Err(pyo3::exceptions::PyValueError::new_err(msg));
-    }
-
-    // strict=False: emit Python warnings.
-    let warnings = py.import("warnings")?;
-    let kwargs = pyo3::types::PyDict::new(py);
-    kwargs.set_item("stacklevel", 2)?;
-    for m in misalignments {
-        let msg = format!(
-            "mor/word misalignment in file '{}', participant '{}':\n\
-             \x20 Main tier: {}\n\
-             \x20 %mor tier: {}\n\
-             \x20 Words ({}): {}\n\
-             \x20 Non-clitic mor items ({}): {}\n\
-             Tokens set to empty for this utterance; \
-             raw tier data is preserved in utterance.tiers.",
-            m.file_path,
-            m.participant,
-            m.main_tier,
-            m.mor_tier,
-            m.word_count,
-            m.words.join(" "),
-            m.mor_count,
-            m.mor_labels.join(" "),
-        );
-        warnings.call_method("warn", (&msg,), Some(&kwargs))?;
-    }
-    Ok(())
-}
-
-/// Convert a [`ChatError`] to a Python exception.
-fn chat_error_to_pyerr(e: ChatError) -> pyo3::PyErr {
-    match e {
-        ChatError::Io(e) => pyo3::exceptions::PyIOError::new_err(e.to_string()),
-        ChatError::InvalidPattern(e) => pyo3::exceptions::PyValueError::new_err(e),
-        ChatError::Zip(e) => pyo3::exceptions::PyIOError::new_err(e),
-    }
-}
-
-use crate::persistence::pathbuf_to_string;
+use crate::persistence::ModelError;
 
 // ---------------------------------------------------------------------------
 // WriteError
@@ -1087,9 +949,14 @@ pub trait BaseChat: Sized {
     // -----------------------------------------------------------------------
 
     /// Filter by file path and/or participant regex patterns (pure Rust).
-    fn filter_by(&self, files: Option<&str>, participants: Option<&str>) -> Result<Self, String> {
+    fn filter_by(
+        &self,
+        files: Option<&str>,
+        participants: Option<&str>,
+    ) -> Result<Self, ModelError> {
         let mut filtered: VecDeque<ChatFile> = if let Some(pattern) = files {
-            let re = FancyRegex::new(pattern).map_err(|e| format!("Invalid file regex: {e}"))?;
+            let re = FancyRegex::new(pattern)
+                .map_err(|e| ModelError::ValidationError(format!("Invalid file regex: {e}")))?;
             self.files()
                 .iter()
                 .filter(|f| re.is_match(&f.file_path).unwrap_or(false))
@@ -1105,8 +972,9 @@ pub trait BaseChat: Sized {
             } else {
                 format!("^(?:{pattern})$")
             };
-            let re = FancyRegex::new(&anchored)
-                .map_err(|e| format!("Invalid participant regex: {e}"))?;
+            let re = FancyRegex::new(&anchored).map_err(|e| {
+                ModelError::ValidationError(format!("Invalid participant regex: {e}"))
+            })?;
             filtered = filtered
                 .into_iter()
                 .map(|f| filter_chat_file_by_participants(f, std::slice::from_ref(&re)))
@@ -1319,229 +1187,6 @@ pub trait BaseChat: Sized {
 }
 
 // ---------------------------------------------------------------------------
-// BasePyChat
-// ---------------------------------------------------------------------------
-
-/// Shared Python-boundary methods with default implementations.
-///
-/// Downstream crates can use these defaults.
-/// Since `#[pymethods]` cannot be applied to trait impl blocks, the concrete
-/// types have thin `#[pymethods]` wrappers that delegate to these methods.
-pub trait BasePyChat: BaseChat {
-    /// Return words grouped by utterance and/or file as Python objects.
-    fn py_words(&self, py: Python<'_>, by_utterance: bool, by_file: bool) -> PyResult<Py<PyAny>> {
-        match (by_utterance, by_file) {
-            (false, false) => {
-                let words: Vec<String> = self
-                    .files()
-                    .iter()
-                    .flat_map(|f| f.real_utterances())
-                    .flat_map(|u| u.tokens.as_deref().unwrap_or(&[]).iter())
-                    .filter(|t| !t.word.is_empty())
-                    .map(|t| t.word.clone())
-                    .collect();
-                Ok(words.into_pyobject(py)?.into_any().unbind())
-            }
-            (true, false) => {
-                let words: Vec<Vec<String>> = self
-                    .files()
-                    .iter()
-                    .flat_map(|f| f.real_utterances())
-                    .map(|u| {
-                        u.tokens
-                            .as_deref()
-                            .unwrap_or(&[])
-                            .iter()
-                            .filter(|t| !t.word.is_empty())
-                            .map(|t| t.word.clone())
-                            .collect()
-                    })
-                    .collect();
-                Ok(words.into_pyobject(py)?.into_any().unbind())
-            }
-            (false, true) => {
-                let words: Vec<Vec<String>> = self
-                    .files()
-                    .iter()
-                    .map(|f| {
-                        f.real_utterances()
-                            .flat_map(|u| u.tokens.as_deref().unwrap_or(&[]).iter())
-                            .filter(|t| !t.word.is_empty())
-                            .map(|t| t.word.clone())
-                            .collect()
-                    })
-                    .collect();
-                Ok(words.into_pyobject(py)?.into_any().unbind())
-            }
-            (true, true) => {
-                let words: Vec<Vec<Vec<String>>> = self
-                    .files()
-                    .iter()
-                    .map(|f| {
-                        f.real_utterances()
-                            .map(|u| {
-                                u.tokens
-                                    .as_deref()
-                                    .unwrap_or(&[])
-                                    .iter()
-                                    .filter(|t| !t.word.is_empty())
-                                    .map(|t| t.word.clone())
-                                    .collect()
-                            })
-                            .collect()
-                    })
-                    .collect();
-                Ok(words.into_pyobject(py)?.into_any().unbind())
-            }
-        }
-    }
-
-    /// Write CHAT data to disk with Python error conversion.
-    fn py_write(&self, path: &str, is_dir: bool, filenames: Option<Vec<String>>) -> PyResult<()> {
-        self.write_files(path, is_dir, filenames)
-            .map_err(|e| match e {
-                WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
-                WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
-            })
-    }
-
-    /// Print a summary of this reader's data.
-    fn py_info(&self, py: Python<'_>, verbose: bool) -> PyResult<()> {
-        let n_files = self.files().len();
-
-        let total_utterances: usize = self
-            .files()
-            .iter()
-            .map(|f| f.real_utterances().count())
-            .sum();
-
-        let total_words: usize = self
-            .files()
-            .iter()
-            .map(|f| {
-                f.real_utterances()
-                    .map(|u| {
-                        u.tokens
-                            .as_deref()
-                            .unwrap_or(&[])
-                            .iter()
-                            .filter(|t| !t.word.is_empty())
-                            .count()
-                    })
-                    .sum::<usize>()
-            })
-            .sum();
-
-        let py_print = py.import("builtins")?.getattr("print")?;
-
-        py_print.call1((format!("{n_files} files"),))?;
-        py_print.call1((format!("{total_utterances} utterances"),))?;
-        py_print.call1((format!("{total_words} words"),))?;
-
-        if n_files < 2 {
-            return Ok(());
-        }
-
-        // Collect per-file stats.
-        let stats: Vec<(usize, usize, &str)> = self
-            .files()
-            .iter()
-            .map(|f| {
-                let utt_count = f.real_utterances().count();
-                let word_count: usize = f
-                    .real_utterances()
-                    .map(|u| {
-                        u.tokens
-                            .as_deref()
-                            .unwrap_or(&[])
-                            .iter()
-                            .filter(|t| !t.word.is_empty())
-                            .count()
-                    })
-                    .sum();
-                (utt_count, word_count, f.file_path.as_str())
-            })
-            .collect();
-
-        let max_rows = if verbose { n_files } else { 5.min(n_files) };
-        let display_stats = &stats[..max_rows];
-
-        // Column widths.
-        let idx_width = format!("#{max_rows}").len().max(2);
-        let utt_header = "Utterance Count";
-        let word_header = "Word Count";
-        let path_header = "File Path";
-
-        let utt_width = display_stats
-            .iter()
-            .map(|(c, _, _)| format!("{c}").len())
-            .max()
-            .unwrap_or(0)
-            .max(utt_header.len());
-        let word_width = display_stats
-            .iter()
-            .map(|(_, c, _)| format!("{c}").len())
-            .max()
-            .unwrap_or(0)
-            .max(word_header.len());
-        let path_width = display_stats
-            .iter()
-            .map(|(_, _, p)| p.len())
-            .max()
-            .unwrap_or(0)
-            .max(path_header.len());
-
-        // Header.
-        py_print.call1((format!(
-            "{:>iw$}  {:>uw$}  {:>ww$}  {:<pw$}",
-            "",
-            utt_header,
-            word_header,
-            path_header,
-            iw = idx_width,
-            uw = utt_width,
-            ww = word_width,
-            pw = path_width,
-        ),))?;
-
-        // Separator.
-        py_print.call1((format!(
-            "{:->iw$}  {:->uw$}  {:->ww$}  {:->pw$}",
-            "",
-            "",
-            "",
-            "",
-            iw = idx_width,
-            uw = utt_width,
-            ww = word_width,
-            pw = path_width,
-        ),))?;
-
-        // Data rows.
-        for (i, (utt, word, path)) in display_stats.iter().enumerate() {
-            py_print.call1((format!(
-                "{:>iw$}  {:>uw$}  {:>ww$}  {:<pw$}",
-                format!("#{}", i + 1),
-                utt,
-                word,
-                path,
-                iw = idx_width,
-                uw = utt_width,
-                ww = word_width,
-                pw = path_width,
-            ),))?;
-        }
-
-        if !verbose {
-            py_print.call1(("...",))?;
-            py_print.call1(("(set `verbose` to True for all the files)",))?;
-        }
-
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Pure Rust Chat struct
 // ---------------------------------------------------------------------------
 
@@ -1611,6 +1256,8 @@ impl Chat {
         strs: Vec<String>,
         ids: Option<Vec<String>>,
         parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
     ) -> (Self, Vec<MisalignmentInfo>) {
         let ids = ids.unwrap_or_else(|| {
             strs.iter()
@@ -1625,7 +1272,7 @@ impl Chat {
             ids.len()
         );
         let pairs: Vec<(String, String)> = strs.into_iter().zip(ids).collect();
-        let (files, misalignments) = parse_chat_strs(pairs, parallel);
+        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier);
         (Self::from_chat_files(files), misalignments)
     }
 
@@ -1635,8 +1282,10 @@ impl Chat {
     pub fn read_files(
         paths: &[String],
         parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
     ) -> Result<(Self, Vec<MisalignmentInfo>), std::io::Error> {
-        let (files, misalignments) = load_chat_files(paths, parallel)?;
+        let (files, misalignments) = load_chat_files(paths, parallel, mor_tier, gra_tier)?;
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1649,6 +1298,8 @@ impl Chat {
         match_pattern: Option<&str>,
         extension: &str,
         parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let mut paths: Vec<String> = Vec::new();
         for entry in walkdir::WalkDir::new(path)
@@ -1664,9 +1315,9 @@ impl Chat {
         }
         paths.sort();
 
-        let filtered =
-            filter_file_paths(&paths, match_pattern).map_err(ChatError::InvalidPattern)?;
-        let (files, misalignments) = load_chat_files(&filtered, parallel)?;
+        let filtered = filter_file_paths(&paths, match_pattern)
+            .map_err(|e| ChatError::InvalidPattern(e.to_string()))?;
+        let (files, misalignments) = load_chat_files(&filtered, parallel, mor_tier, gra_tier)?;
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1679,6 +1330,8 @@ impl Chat {
         match_pattern: Option<&str>,
         extension: &str,
         parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let file = std::fs::File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)
@@ -1697,8 +1350,8 @@ impl Chat {
             .collect();
         entry_names.sort();
 
-        let filtered =
-            filter_file_paths(&entry_names, match_pattern).map_err(ChatError::InvalidPattern)?;
+        let filtered = filter_file_paths(&entry_names, match_pattern)
+            .map_err(|e| ChatError::InvalidPattern(e.to_string()))?;
 
         let mut pairs: Vec<(String, String)> = Vec::new();
         for name in &filtered {
@@ -1711,633 +1364,8 @@ impl Chat {
             pairs.push((content, name.clone()));
         }
 
-        let (files, misalignments) = parse_chat_strs(pairs, parallel);
+        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier);
         Ok((Self::from_chat_files(files), misalignments))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Python-exposed PyChat wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed CHAT data reader.
-///
-/// Wraps the pure Rust [`Chat`] struct and exposes it to Python via PyO3.
-#[pyclass(name = "CHAT", from_py_object)]
-#[derive(Clone)]
-pub struct PyChat {
-    pub inner: Chat,
-}
-
-impl BaseChat for PyChat {
-    fn files(&self) -> &VecDeque<ChatFile> {
-        self.inner.files()
-    }
-    fn files_mut(&mut self) -> &mut VecDeque<ChatFile> {
-        self.inner.files_mut()
-    }
-    fn from_files(files: VecDeque<ChatFile>) -> Self {
-        Self {
-            inner: Chat::from_files(files),
-        }
-    }
-}
-
-impl BasePyChat for PyChat {}
-
-#[pymethods]
-impl PyChat {
-    #[new]
-    fn new() -> Self {
-        Self::from_files(VecDeque::new())
-    }
-
-    /// Parse CHAT data from in-memory strings.
-    #[classmethod]
-    #[pyo3(signature = (strs, ids=None, parallel=true, strict=true))]
-    fn from_strs(
-        _cls: &Bound<'_, PyType>,
-        strs: Vec<String>,
-        ids: Option<Vec<String>>,
-        parallel: bool,
-        strict: bool,
-    ) -> PyResult<Self> {
-        if let Some(ref ids) = ids
-            && strs.len() != ids.len()
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "strs and ids must have the same length: {} vs {}",
-                strs.len(),
-                ids.len()
-            )));
-        }
-        let py = _cls.py();
-        let (chat, misalignments) = Chat::from_strs(strs, ids, parallel);
-        handle_misalignments(&misalignments, strict, py)?;
-        let result = Self { inner: chat };
-        for f in result.inner.files() {
-            f.cached_py_utterances(py);
-            f.cached_py_tokens(py);
-        }
-        Ok(result)
-    }
-
-    /// Construct a CHAT reader from a list of utterances.
-    #[classmethod]
-    #[pyo3(name = "from_utterances")]
-    #[pyo3(signature = (utterances))]
-    fn py_from_utterances(_cls: &Bound<'_, PyType>, utterances: Vec<PyUtterance>) -> Self {
-        let utts: Vec<Utterance> = utterances.into_iter().map(|pu| pu.0).collect();
-        let result = <Self as BaseChat>::from_utterances(utts);
-        let py = _cls.py();
-        for f in result.inner.files() {
-            f.cached_py_utterances(py);
-            f.cached_py_tokens(py);
-        }
-        result
-    }
-
-    /// Load CHAT data from file paths.
-    #[classmethod]
-    #[pyo3(name = "from_files")]
-    #[pyo3(signature = (paths, *, parallel=true, strict=true))]
-    fn read_files(
-        _cls: &Bound<'_, PyType>,
-        paths: Vec<PathBuf>,
-        parallel: bool,
-        strict: bool,
-    ) -> PyResult<Self> {
-        let paths: Vec<String> = paths
-            .into_iter()
-            .map(pathbuf_to_string)
-            .collect::<PyResult<_>>()?;
-        let py = _cls.py();
-        let (chat, misalignments) = Chat::read_files(&paths, parallel)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let result = Self { inner: chat };
-        for f in result.inner.files() {
-            f.cached_py_utterances(py);
-            f.cached_py_tokens(py);
-        }
-        Ok(result)
-    }
-
-    /// Recursively load CHAT data from a directory.
-    #[classmethod]
-    #[pyo3(name = "from_dir")]
-    #[pyo3(signature = (path, *, r#match=None, extension=".cha", parallel=true, strict=true))]
-    fn read_dir(
-        _cls: &Bound<'_, PyType>,
-        path: PathBuf,
-        r#match: Option<&str>,
-        extension: &str,
-        parallel: bool,
-        strict: bool,
-    ) -> PyResult<Self> {
-        let path = pathbuf_to_string(path)?;
-        let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::read_dir(&path, r#match, extension, parallel).map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let result = Self { inner: chat };
-        for f in result.inner.files() {
-            f.cached_py_utterances(py);
-            f.cached_py_tokens(py);
-        }
-        Ok(result)
-    }
-
-    /// Load CHAT data from a ZIP archive.
-    #[classmethod]
-    #[pyo3(name = "from_zip")]
-    #[pyo3(signature = (path, *, r#match=None, extension=".cha", parallel=true, strict=true))]
-    fn open_zip(
-        _cls: &Bound<'_, PyType>,
-        path: PathBuf,
-        r#match: Option<&str>,
-        extension: &str,
-        parallel: bool,
-        strict: bool,
-    ) -> PyResult<Self> {
-        let path = pathbuf_to_string(path)?;
-        let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::read_zip(&path, r#match, extension, parallel).map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let result = Self { inner: chat };
-        for f in result.inner.files() {
-            f.cached_py_utterances(py);
-            f.cached_py_tokens(py);
-        }
-        Ok(result)
-    }
-
-    /// Return the list of file paths.
-    #[getter]
-    #[pyo3(name = "file_paths")]
-    fn py_file_paths(&self) -> Vec<String> {
-        self.file_paths()
-    }
-
-    /// Return the number of files.
-    #[getter]
-    fn n_files(&self) -> usize {
-        self.num_files()
-    }
-
-    /// Print a summary of this reader's data.
-    #[pyo3(signature = (*, verbose = false))]
-    fn info(&self, py: Python<'_>, verbose: bool) -> PyResult<()> {
-        self.py_info(py, verbose)
-    }
-
-    /// Return a new CHAT filtered by file path and/or participant regex.
-    #[pyo3(signature = (*, files=None, participants=None))]
-    fn filter(
-        &self,
-        files: Option<&Bound<'_, PyAny>>,
-        participants: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Self> {
-        // Step 1: Filter by file path.
-        let filtered_files: VecDeque<ChatFile> = if let Some(files_arg) = files {
-            let patterns = compile_file_patterns(files_arg)?;
-            self.files()
-                .iter()
-                .filter(|f| {
-                    patterns
-                        .iter()
-                        .any(|re| re.is_match(&f.file_path).unwrap_or(false))
-                })
-                .cloned()
-                .collect()
-        } else {
-            self.files().clone()
-        };
-
-        // Step 2: Filter by participant.
-        let filtered_files = if let Some(participants_arg) = participants {
-            let patterns = compile_participant_patterns(participants_arg)?;
-            filtered_files
-                .into_iter()
-                .map(|f| filter_chat_file_by_participants(f, &patterns))
-                .collect()
-        } else {
-            filtered_files
-        };
-
-        Ok(Self::from_files(filtered_files))
-    }
-
-    /// Return utterances, optionally grouped by file.
-    #[pyo3(signature = (*, by_file=false))]
-    fn utterances(&self, py: Python<'_>, by_file: bool) -> PyResult<Py<PyAny>> {
-        if by_file {
-            let result: Vec<Vec<Py<PyUtterance>>> = self
-                .files()
-                .iter()
-                .map(|f| {
-                    f.cached_py_utterances(py)
-                        .iter()
-                        .map(|p| p.clone_ref(py))
-                        .collect()
-                })
-                .collect();
-            Ok(result.into_pyobject(py)?.into_any().unbind())
-        } else {
-            let mut result: Vec<Py<PyUtterance>> = Vec::new();
-            for f in self.files() {
-                for p in f.cached_py_utterances(py) {
-                    result.push(p.clone_ref(py));
-                }
-            }
-            Ok(result.into_pyobject(py)?.into_any().unbind())
-        }
-    }
-
-    /// Return the first n utterances with a formatted display.
-    #[pyo3(name = "head", signature = (n=5))]
-    fn py_head(&self, n: usize) -> PyUtterances {
-        PyUtterances(self.head(n))
-    }
-
-    /// Return the last n utterances with a formatted display.
-    #[pyo3(name = "tail", signature = (n=5))]
-    fn py_tail(&self, n: usize) -> PyUtterances {
-        PyUtterances(self.tail(n))
-    }
-
-    /// Return words, optionally grouped by utterance and/or file.
-    #[pyo3(signature = (*, by_utterance=false, by_file=false))]
-    fn words(&self, py: Python<'_>, by_utterance: bool, by_file: bool) -> PyResult<Py<PyAny>> {
-        self.py_words(py, by_utterance, by_file)
-    }
-
-    /// Return tokens, optionally grouped by utterance and/or file.
-    #[pyo3(signature = (*, by_utterance=false, by_file=false))]
-    fn tokens(&self, py: Python<'_>, by_utterance: bool, by_file: bool) -> PyResult<Py<PyAny>> {
-        match (by_utterance, by_file) {
-            (false, false) => {
-                let tokens: Vec<Py<PyToken>> = self
-                    .files()
-                    .iter()
-                    .flat_map(|f| f.cached_py_tokens(py))
-                    .flat_map(|utt_tokens| utt_tokens.iter())
-                    .map(|t| t.clone_ref(py))
-                    .collect();
-                Ok(tokens.into_pyobject(py)?.into_any().unbind())
-            }
-            (true, false) => {
-                let tokens: Vec<Vec<Py<PyToken>>> = self
-                    .files()
-                    .iter()
-                    .flat_map(|f| f.cached_py_tokens(py))
-                    .map(|utt_tokens| utt_tokens.iter().map(|t| t.clone_ref(py)).collect())
-                    .collect();
-                Ok(tokens.into_pyobject(py)?.into_any().unbind())
-            }
-            (false, true) => {
-                let tokens: Vec<Vec<Py<PyToken>>> = self
-                    .files()
-                    .iter()
-                    .map(|f| {
-                        f.cached_py_tokens(py)
-                            .iter()
-                            .flat_map(|utt_tokens| utt_tokens.iter())
-                            .map(|t| t.clone_ref(py))
-                            .collect()
-                    })
-                    .collect();
-                Ok(tokens.into_pyobject(py)?.into_any().unbind())
-            }
-            (true, true) => {
-                let tokens: Vec<Vec<Vec<Py<PyToken>>>> = self
-                    .files()
-                    .iter()
-                    .map(|f| {
-                        f.cached_py_tokens(py)
-                            .iter()
-                            .map(|utt_tokens| utt_tokens.iter().map(|t| t.clone_ref(py)).collect())
-                            .collect()
-                    })
-                    .collect();
-                Ok(tokens.into_pyobject(py)?.into_any().unbind())
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Developmental measures
-    // -----------------------------------------------------------------------
-
-    /// Mean length of utterance in morphemes, one value per file.
-    #[pyo3(name = "mlum", signature = (*, participant="CHI", n=Some(100)))]
-    fn py_mlum(&self, participant: &str, n: Option<usize>) -> Vec<f64> {
-        self.mlum(participant, n)
-    }
-
-    /// Mean length of utterance in morphemes, one value per file.
-    ///
-    /// Alias for [`mlum`][Chat::mlum].
-    #[pyo3(signature = (*, participant="CHI", n=Some(100)))]
-    fn mlu(&self, participant: &str, n: Option<usize>) -> Vec<f64> {
-        self.mlum(participant, n)
-    }
-
-    /// Mean length of utterance in words, one value per file.
-    #[pyo3(name = "mluw", signature = (*, participant="CHI", n=Some(100)))]
-    fn py_mluw(&self, participant: &str, n: Option<usize>) -> Vec<f64> {
-        self.mluw(participant, n)
-    }
-
-    /// Type-token ratio, one value per file.
-    #[pyo3(name = "ttr", signature = (*, participant="CHI", n=Some(350)))]
-    fn py_ttr(&self, participant: &str, n: Option<usize>) -> Vec<f64> {
-        self.ttr(participant, n)
-    }
-
-    /// Index of Productive Syntax, one value per file.
-    #[pyo3(signature = (*, participant="CHI", n=Some(100)))]
-    fn ipsyn(&self, participant: &str, n: Option<usize>) -> Vec<usize> {
-        self.files()
-            .iter()
-            .map(|f| {
-                let utterances: Vec<_> = f
-                    .real_utterances()
-                    .filter(|u| u.participant.as_deref() == Some(participant))
-                    .collect();
-                let utterances = if let Some(n) = n {
-                    &utterances[..utterances.len().min(n)]
-                } else {
-                    &utterances[..]
-                };
-                super::ipsyn::ipsyn_for_file(utterances)
-            })
-            .collect()
-    }
-
-    /// Return the age of the target child (CHI) in each file.
-    #[pyo3(name = "ages")]
-    fn py_ages(&self) -> Vec<Option<Age>> {
-        self.ages()
-    }
-
-    /// Return an Ngrams for word n-grams across all utterances.
-    ///
-    /// N-grams do not cross utterance boundaries.
-    ///
-    /// # Arguments
-    ///
-    /// * `n` - The n-gram order (1 for unigrams, 2 for bigrams, etc.).
-    #[pyo3(signature = (n))]
-    fn word_ngrams(&self, n: usize) -> PyResult<PyNgrams> {
-        let mut counter = Ngrams::new(n, None).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        for file in self.files() {
-            for utt in file.real_utterances() {
-                let words: Vec<String> = utt
-                    .tokens
-                    .as_deref()
-                    .unwrap_or(&[])
-                    .iter()
-                    .filter(|t| !t.word.is_empty())
-                    .map(|t| t.word.clone())
-                    .collect();
-                counter.count(words);
-            }
-        }
-        Ok(PyNgrams { inner: counter })
-    }
-
-    // -----------------------------------------------------------------------
-    // Header access
-    // -----------------------------------------------------------------------
-
-    /// Return file-level headers.
-    #[pyo3(name = "headers")]
-    fn py_headers(&self) -> Vec<Headers> {
-        self.headers()
-    }
-
-    /// Return participants, optionally grouped by file.
-    #[pyo3(name = "participants")]
-    #[pyo3(signature = (*, by_file=false))]
-    fn py_participants(&self, py: Python<'_>, by_file: bool) -> PyResult<Py<PyAny>> {
-        if by_file {
-            Ok(self.participants().into_pyobject(py)?.into_any().unbind())
-        } else {
-            Ok(self
-                .unique_participants()
-                .into_pyobject(py)?
-                .into_any()
-                .unbind())
-        }
-    }
-
-    /// Return languages, optionally grouped by file.
-    #[pyo3(name = "languages")]
-    #[pyo3(signature = (*, by_file=false))]
-    fn py_languages(&self, py: Python<'_>, by_file: bool) -> PyResult<Py<PyAny>> {
-        if by_file {
-            Ok(self.languages().into_pyobject(py)?.into_any().unbind())
-        } else {
-            Ok(self
-                .unique_languages()
-                .into_pyobject(py)?
-                .into_any()
-                .unbind())
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Stitching / unstitching
-    // -----------------------------------------------------------------------
-
-    /// Append data from another CHAT reader.
-    #[pyo3(name = "append", signature = (other, /))]
-    fn py_push_back(&mut self, other: &PyChat) {
-        self.inner.push_back(&other.inner);
-    }
-
-    /// Left-append data from another CHAT reader, preserving order.
-    #[pyo3(name = "append_left", signature = (other, /))]
-    fn py_push_front(&mut self, other: &PyChat) {
-        self.inner.push_front(&other.inner);
-    }
-
-    /// Extend data from multiple CHAT readers.
-    #[pyo3(name = "extend", signature = (others, /))]
-    fn extend_back(&mut self, others: Vec<PyRef<'_, PyChat>>) {
-        for other in &others {
-            self.files_mut().extend(other.files().iter().cloned());
-        }
-    }
-
-    /// Left-extend data from multiple CHAT readers, preserving order.
-    #[pyo3(name = "extend_left", signature = (others, /))]
-    fn extend_front(&mut self, others: Vec<PyRef<'_, PyChat>>) {
-        let mut new_files: VecDeque<ChatFile> = VecDeque::new();
-        for other in &others {
-            new_files.extend(other.files().iter().cloned());
-        }
-        new_files.extend(std::mem::take(self.files_mut()));
-        *self.files_mut() = new_files;
-    }
-
-    /// Remove and return the last file as a new CHAT reader.
-    #[pyo3(name = "pop")]
-    fn pop_back(&mut self) -> PyResult<PyChat> {
-        match self.files_mut().pop_back() {
-            Some(file) => Ok(Self::from_files(VecDeque::from(vec![file]))),
-            None => Err(pyo3::exceptions::PyIndexError::new_err(
-                "pop from an empty CHAT reader",
-            )),
-        }
-    }
-
-    /// Remove and return the first file as a new CHAT reader.
-    #[pyo3(name = "pop_left")]
-    fn pop_front(&mut self) -> PyResult<PyChat> {
-        match self.files_mut().pop_front() {
-            Some(file) => Ok(Self::from_files(VecDeque::from(vec![file]))),
-            None => Err(pyo3::exceptions::PyIndexError::new_err(
-                "pop from an empty CHAT reader",
-            )),
-        }
-    }
-
-    /// Remove all data from this reader.
-    #[pyo3(name = "clear")]
-    fn py_clear(&mut self) {
-        self.clear();
-    }
-
-    fn __add__(&self, other: &PyChat) -> PyChat {
-        let mut result = self.clone();
-        result.files_mut().extend(other.files().iter().cloned());
-        result
-    }
-
-    fn __iadd__(&mut self, other: &PyChat) {
-        self.files_mut().extend(other.files().iter().cloned());
-    }
-
-    fn __iter__(slf: PyRef<'_, Self>) -> ChatIter {
-        ChatIter {
-            inner: slf.files().clone(),
-            index: 0,
-        }
-    }
-
-    fn __getitem__(&self, index: &Bound<'_, PyAny>) -> PyResult<PyChat> {
-        if let Ok(i) = index.extract::<isize>() {
-            let len = self.files().len() as isize;
-            let idx = if i < 0 { len + i } else { i };
-            if idx < 0 || idx >= len {
-                return Err(pyo3::exceptions::PyIndexError::new_err(
-                    "index out of range",
-                ));
-            }
-            return Ok(Self::from_files(VecDeque::from(vec![
-                self.files()[idx as usize].clone(),
-            ])));
-        }
-        if let Ok(slice) = index.cast::<PySlice>() {
-            let indices = slice.indices(self.files().len() as isize)?;
-            let mut result = VecDeque::with_capacity(indices.slicelength);
-            let mut i = indices.start;
-            for _ in 0..indices.slicelength {
-                result.push_back(self.files()[i as usize].clone());
-                i += indices.step;
-            }
-            return Ok(Self::from_files(result));
-        }
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "indices must be integers or slices",
-        ))
-    }
-
-    // -----------------------------------------------------------------------
-    // Serialization
-    // -----------------------------------------------------------------------
-
-    /// Return CHAT data strings, one per file.
-    #[pyo3(name = "to_strs")]
-    fn py_to_strings(&self) -> Vec<String> {
-        self.to_strings()
-    }
-
-    /// Write CHAT data to disk.
-    #[pyo3(name = "to_chat")]
-    #[pyo3(signature = (path, *, is_dir=false, filenames=None))]
-    fn write(&self, path: PathBuf, is_dir: bool, filenames: Option<Vec<String>>) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.py_write(&path, is_dir, filenames)
-    }
-
-    fn __bool__(&self) -> bool {
-        !self.is_empty()
-    }
-
-    fn __len__(&self) -> PyResult<usize> {
-        Err(pyo3::exceptions::PyTypeError::new_err(
-            "__len__ of a CHAT object is intentionally undefined. \
-             Intuitively, there are different lengths one may refer to: \
-             Number of files? Utterances? Words? Something else?",
-        ))
-    }
-
-    fn __repr__(&self) -> String {
-        format!("<CHAT with {} file(s)>", self.num_files())
-    }
-
-    fn __eq__(&self, other: &PyChat) -> bool {
-        self.files().len() == other.files().len()
-            && self
-                .files()
-                .iter()
-                .zip(other.files())
-                .all(|(a, b)| a.eq_data(b))
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.files().len().hash(&mut hasher);
-        for f in self.files() {
-            f.file_path.hash(&mut hasher);
-            f.headers.hash_into(&mut hasher);
-            f.events.len().hash(&mut hasher);
-            for u in &f.events {
-                u.hash_into(&mut hasher);
-            }
-            f.raw_lines.hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-}
-
-/// Iterator for [`Chat`], yielding single-file `Chat` objects.
-#[pyclass]
-struct ChatIter {
-    inner: VecDeque<ChatFile>,
-    index: usize,
-}
-
-#[pymethods]
-impl ChatIter {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&mut self) -> Option<PyChat> {
-        if self.index < self.inner.len() {
-            let file = self.inner[self.index].clone();
-            self.index += 1;
-            Some(PyChat {
-                inner: Chat::from_files(VecDeque::from(vec![file])),
-            })
-        } else {
-            None
-        }
     }
 }
 
@@ -2352,25 +1380,12 @@ mod tests {
 
     #[test]
     fn test_chat_file_is_empty() {
-        let empty_file = ChatFile {
-            file_path: String::new(),
-            headers: Headers::default(),
-            events: vec![],
-            raw_lines: vec![],
-            py_utterances: Arc::new(OnceLock::new()),
-            py_tokens: Arc::new(OnceLock::new()),
-        };
+        let empty_file = ChatFile::new(String::new(), Headers::default(), vec![], vec![]);
         assert!(empty_file.is_empty());
 
-        let (headers, events, raw_lines, _) = parse_chat_str(make_basic_chat(), true);
-        let non_empty_file = ChatFile {
-            file_path: "test".to_string(),
-            headers,
-            events,
-            raw_lines,
-            py_utterances: Arc::new(OnceLock::new()),
-            py_tokens: Arc::new(OnceLock::new()),
-        };
+        let (headers, events, raw_lines, _) =
+            parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
+        let non_empty_file = ChatFile::new("test".to_string(), headers, events, raw_lines);
         assert!(!non_empty_file.is_empty());
     }
 
@@ -2395,7 +1410,7 @@ mod tests {
     #[test]
     fn test_parse_chat_str_leading_whitespace() {
         let input = "  @UTF8\n  @Begin\n  @Participants:\tCHI Child, MOT Mother\n  *CHI:\tI want cookie .\n  %mor:\tpro|I v|want n|cookie .\n  %gra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n  @End\n";
-        let (_, events, _, _) = parse_chat_str(input, true);
+        let (_, events, _, _) = parse_chat_str(input, true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
             .iter()
             .filter(|u| u.changeable_header.is_none())
@@ -2536,7 +1551,7 @@ mod tests {
 
     #[test]
     fn test_parse_chat_str_basic() {
-        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true);
+        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
             .iter()
             .filter(|u| u.changeable_header.is_none())
@@ -2558,7 +1573,7 @@ mod tests {
                      *CHI:\tshe said \u{201c}I want cookies\u{201d} .\n\
                      %mor:\tpro:sub|she v|say&PAST pro:sub|I v|want n|cookie-PL.\n\
                      @End\n";
-        let (_, events, _, misalignments) = parse_chat_str(input, false);
+        let (_, events, _, misalignments) = parse_chat_str(input, false, DEFAULT_MOR, DEFAULT_GRA);
         assert!(misalignments.is_empty());
         let utterances: Vec<&Utterance> = events
             .iter()
@@ -2578,7 +1593,7 @@ mod tests {
     #[test]
     fn test_parse_chat_str_time_marks() {
         let input = "@UTF8\n@Begin\n*CHI:\thello . \x15123_456\x15\n@End\n";
-        let (_, events, _, _) = parse_chat_str(input, true);
+        let (_, events, _, _) = parse_chat_str(input, true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
             .iter()
             .filter(|u| u.changeable_header.is_none())
@@ -2590,7 +1605,7 @@ mod tests {
     #[test]
     fn test_parse_chat_str_no_mor() {
         let input = "@UTF8\n@Begin\n*CHI:\thello world .\n@End\n";
-        let (_, events, _, _) = parse_chat_str(input, true);
+        let (_, events, _, _) = parse_chat_str(input, true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
             .iter()
             .filter(|u| u.changeable_header.is_none())
@@ -2649,14 +1664,15 @@ mod tests {
                      *CHI:\tI want cookie .\n\
                      %mor:\tpro|I v|want .\n\
                      @End\n";
-        let (_, _, _, misalignments) = parse_chat_str(input, false);
+        let (_, _, _, misalignments) = parse_chat_str(input, false, DEFAULT_MOR, DEFAULT_GRA);
         assert!(!misalignments.is_empty());
         assert_eq!(misalignments[0].participant, "CHI");
     }
 
     #[test]
     fn test_parse_chat_str_no_misalignment() {
-        let (_, _, _, misalignments) = parse_chat_str(make_basic_chat(), true);
+        let (_, _, _, misalignments) =
+            parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
         assert!(misalignments.is_empty());
     }
 
@@ -2700,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_tiers_in_utterance() {
-        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true);
+        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
             .iter()
             .filter(|u| u.changeable_header.is_none())
@@ -2713,7 +1729,8 @@ mod tests {
 
     #[test]
     fn test_raw_lines_captured() {
-        let (_, _, raw_lines, _) = parse_chat_str(make_basic_chat(), true);
+        let (_, _, raw_lines, _) =
+            parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
         assert!(raw_lines.iter().any(|l| l == "@UTF8"));
         assert!(raw_lines.iter().any(|l| l == "@Begin"));
         assert!(raw_lines.iter().any(|l| l.starts_with("@Participants:")));
@@ -2725,32 +1742,23 @@ mod tests {
     #[test]
     fn test_serialize_round_trip() {
         let input = make_basic_chat();
-        let (_, _, raw_lines, _) = parse_chat_str(input, true);
-        let file = ChatFile {
-            file_path: "test".to_string(),
-            headers: Headers::default(),
-            events: vec![],
-            raw_lines,
-            py_utterances: Arc::new(OnceLock::new()),
-            py_tokens: Arc::new(OnceLock::new()),
-        };
+        let (_, _, raw_lines, _) = parse_chat_str(input, true, DEFAULT_MOR, DEFAULT_GRA);
+        let file = ChatFile::new("test".to_string(), Headers::default(), vec![], raw_lines);
         let output = serialize_chat_file(&file);
         // Re-parse and verify the lines match.
-        let (_, _, raw_lines2, _) = parse_chat_str(&output, true);
-        let (_, _, raw_lines_orig, _) = parse_chat_str(input, true);
+        let (_, _, raw_lines2, _) = parse_chat_str(&output, true, DEFAULT_MOR, DEFAULT_GRA);
+        let (_, _, raw_lines_orig, _) = parse_chat_str(input, true, DEFAULT_MOR, DEFAULT_GRA);
         assert_eq!(raw_lines2, raw_lines_orig);
     }
 
+    /// Default mor/gra tier names for tests.
+    const DEFAULT_MOR: Option<&str> = Some("%mor");
+    const DEFAULT_GRA: Option<&str> = Some("%gra");
+
     fn make_chat_file(id: &str, chat_str: &str) -> ChatFile {
-        let (headers, events, raw_lines, _) = parse_chat_str(chat_str, false);
-        ChatFile {
-            file_path: id.to_string(),
-            headers,
-            events,
-            raw_lines,
-            py_utterances: Arc::new(OnceLock::new()),
-            py_tokens: Arc::new(OnceLock::new()),
-        }
+        let (headers, events, raw_lines, _) =
+            parse_chat_str(chat_str, false, DEFAULT_MOR, DEFAULT_GRA);
+        ChatFile::new(id.to_string(), headers, events, raw_lines)
     }
 
     fn make_chat(files: Vec<ChatFile>) -> Chat {
@@ -2830,6 +1838,8 @@ mod tests {
                 time_marks: None,
                 tiers: None,
                 changeable_header: None,
+                mor_tier_name: Some("%mor".to_string()),
+                gra_tier_name: Some("%gra".to_string()),
             },
             Utterance {
                 participant: Some("MOT".to_string()),
@@ -2842,6 +1852,8 @@ mod tests {
                 time_marks: None,
                 tiers: None,
                 changeable_header: None,
+                mor_tier_name: Some("%mor".to_string()),
+                gra_tier_name: Some("%gra".to_string()),
             },
         ];
         let chat = Chat::from_utterances(utts.clone());
@@ -2876,6 +1888,8 @@ mod tests {
             time_marks: None,
             tiers: Some(tiers),
             changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
         }];
         let chat = Chat::from_utterances(utts);
         assert_eq!(chat.files[0].raw_lines.len(), 2);
@@ -2886,7 +1900,13 @@ mod tests {
     #[test]
     fn test_from_utterances_serialization_round_trip() {
         // Parse CHAT, extract utterances, reconstruct, serialize, re-parse.
-        let (original, _) = Chat::from_strs(vec![make_basic_chat().to_string()], None, false);
+        let (original, _) = Chat::from_strs(
+            vec![make_basic_chat().to_string()],
+            None,
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        );
         let utts: Vec<Utterance> = original
             .files
             .iter()
@@ -3172,6 +2192,8 @@ mod tests {
             vec![make_basic_chat().to_string()],
             Some(vec!["test-id".to_string()]),
             false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
         );
         assert!(misalignments.is_empty());
         assert_eq!(chat.num_files(), 1);
@@ -3192,6 +2214,8 @@ mod tests {
             vec![make_basic_chat().to_string(), make_basic_chat().to_string()],
             None,
             false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
         );
         assert_eq!(chat.num_files(), 2);
         // Auto-generated UUIDs should be unique.
@@ -3206,6 +2230,8 @@ mod tests {
             vec![make_basic_chat().to_string()],
             Some(vec!["a".to_string(), "b".to_string()]),
             false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
         );
     }
 
@@ -3215,8 +2241,13 @@ mod tests {
         let file_path = dir.path().join("test.cha");
         std::fs::write(&file_path, make_basic_chat()).unwrap();
 
-        let (chat, misalignments) =
-            Chat::read_files(&[file_path.to_string_lossy().to_string()], false).unwrap();
+        let (chat, misalignments) = Chat::read_files(
+            &[file_path.to_string_lossy().to_string()],
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        )
+        .unwrap();
         assert!(misalignments.is_empty());
         assert_eq!(chat.num_files(), 1);
         let utts: Vec<&Utterance> = chat
@@ -3234,7 +2265,15 @@ mod tests {
         std::fs::write(dir.path().join("b.cha"), make_basic_chat()).unwrap();
         std::fs::write(dir.path().join("c.txt"), "not a chat file").unwrap();
 
-        let (chat, _) = Chat::read_dir(&dir.path().to_string_lossy(), None, ".cha", false).unwrap();
+        let (chat, _) = Chat::read_dir(
+            &dir.path().to_string_lossy(),
+            None,
+            ".cha",
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        )
+        .unwrap();
         assert_eq!(chat.num_files(), 2);
     }
 
@@ -3244,8 +2283,15 @@ mod tests {
         std::fs::write(dir.path().join("alpha.cha"), make_basic_chat()).unwrap();
         std::fs::write(dir.path().join("beta.cha"), make_basic_chat()).unwrap();
 
-        let (chat, _) =
-            Chat::read_dir(&dir.path().to_string_lossy(), Some("alpha"), ".cha", false).unwrap();
+        let (chat, _) = Chat::read_dir(
+            &dir.path().to_string_lossy(),
+            Some("alpha"),
+            ".cha",
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        )
+        .unwrap();
         assert_eq!(chat.num_files(), 1);
     }
 
@@ -3264,7 +2310,15 @@ mod tests {
         std::io::Write::write_all(&mut zip, b"not a chat file").unwrap();
         zip.finish().unwrap();
 
-        let (chat, _) = Chat::read_zip(&zip_path.to_string_lossy(), None, ".cha", false).unwrap();
+        let (chat, _) = Chat::read_zip(
+            &zip_path.to_string_lossy(),
+            None,
+            ".cha",
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        )
+        .unwrap();
         assert_eq!(chat.num_files(), 2);
     }
 
@@ -3281,8 +2335,133 @@ mod tests {
         std::io::Write::write_all(&mut zip, make_basic_chat().as_bytes()).unwrap();
         zip.finish().unwrap();
 
-        let (chat, _) =
-            Chat::read_zip(&zip_path.to_string_lossy(), Some("alpha"), ".cha", false).unwrap();
+        let (chat, _) = Chat::read_zip(
+            &zip_path.to_string_lossy(),
+            Some("alpha"),
+            ".cha",
+            false,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        )
+        .unwrap();
         assert_eq!(chat.num_files(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for custom mor_tier / gra_tier
+    // -----------------------------------------------------------------------
+
+    fn make_chat_with_custom_tiers() -> &'static str {
+        "@UTF8\n@Begin\n@Participants:\tCHI Child\n*CHI:\tI want cookie .\n%xmor:\tpro|I v|want n|cookie .\n%xgra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n@End\n"
+    }
+
+    #[test]
+    fn test_custom_tier_names_parsed() {
+        let (_, events, _, misalignments) = parse_chat_str(
+            make_chat_with_custom_tiers(),
+            true,
+            Some("%xmor"),
+            Some("%xgra"),
+        );
+        assert!(misalignments.is_empty());
+        assert_eq!(events.len(), 1);
+        let utt = &events[0];
+        let tokens = utt.tokens.as_ref().unwrap();
+        // mor should be parsed from %xmor: pos="pro", mor="I"
+        assert_eq!(tokens[0].pos.as_deref(), Some("pro"));
+        assert_eq!(tokens[0].mor.as_deref(), Some("I"));
+        assert_eq!(tokens[0].gra.as_ref().unwrap().rel, "SUBJ");
+        // tier names should be stored
+        assert_eq!(utt.mor_tier_name.as_deref(), Some("%xmor"));
+        assert_eq!(utt.gra_tier_name.as_deref(), Some("%xgra"));
+    }
+
+    #[test]
+    fn test_default_tiers_ignore_custom_tier_data() {
+        // If data has %xmor but we look for %mor, no mor/gra should be parsed.
+        let (_, events, _, _) = parse_chat_str(
+            make_chat_with_custom_tiers(),
+            true,
+            DEFAULT_MOR,
+            DEFAULT_GRA,
+        );
+        let tokens = events[0].tokens.as_ref().unwrap();
+        assert!(tokens[0].mor.is_none());
+        assert!(tokens[0].gra.is_none());
+    }
+
+    #[test]
+    fn test_none_tiers_disable_mor_gra() {
+        let (_, events, _, misalignments) = parse_chat_str(make_basic_chat(), true, None, None);
+        assert!(misalignments.is_empty());
+        let tokens = events[0].tokens.as_ref().unwrap();
+        // mor and gra should not be parsed even though %mor/%gra tiers exist
+        assert!(tokens[0].mor.is_none());
+        assert!(tokens[0].gra.is_none());
+        // tier names should be None
+        assert!(events[0].mor_tier_name.is_none());
+        assert!(events[0].gra_tier_name.is_none());
+    }
+
+    #[test]
+    fn test_none_mor_disables_both() {
+        // If only mor_tier is None, both should be disabled
+        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true, None, DEFAULT_GRA);
+        let tokens = events[0].tokens.as_ref().unwrap();
+        assert!(tokens[0].mor.is_none());
+        assert!(tokens[0].gra.is_none());
+    }
+
+    #[test]
+    fn test_none_gra_disables_both() {
+        // If only gra_tier is None, both should be disabled
+        let (_, events, _, _) = parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, None);
+        let tokens = events[0].tokens.as_ref().unwrap();
+        assert!(tokens[0].mor.is_none());
+        assert!(tokens[0].gra.is_none());
+    }
+
+    #[test]
+    fn test_custom_tiers_from_strs() {
+        let (chat, misalignments) = Chat::from_strs(
+            vec![make_chat_with_custom_tiers().to_string()],
+            None,
+            true,
+            Some("%xmor"),
+            Some("%xgra"),
+        );
+        assert!(misalignments.is_empty());
+        let files = chat.files();
+        let utt = files[0].utterances().next().unwrap();
+        let tokens = utt.tokens.as_ref().unwrap();
+        assert_eq!(tokens[0].pos.as_deref(), Some("pro"));
+        assert_eq!(tokens[0].mor.as_deref(), Some("I"));
+    }
+
+    #[test]
+    fn test_disabled_tiers_from_strs() {
+        let (chat, _) =
+            Chat::from_strs(vec![make_basic_chat().to_string()], None, true, None, None);
+        let files = chat.files();
+        let utt = files[0].utterances().next().unwrap();
+        let tokens = utt.tokens.as_ref().unwrap();
+        assert!(tokens[0].mor.is_none());
+    }
+
+    #[test]
+    fn test_custom_tiers_to_chat_lines() {
+        let (_, events, _, _) = parse_chat_str(
+            make_chat_with_custom_tiers(),
+            true,
+            Some("%xmor"),
+            Some("%xgra"),
+        );
+        let lines = events[0].to_chat_lines();
+        let joined = lines.join("\n");
+        // Serialized output should use %xmor and %xgra, not %mor/%gra
+        assert!(joined.contains("%xmor:"));
+        assert!(joined.contains("%xgra:"));
+        assert!(!joined.contains("%mor:"));
+        assert!(!joined.contains("%gra:"));
     }
 }

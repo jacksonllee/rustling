@@ -3,9 +3,16 @@
 //! This module provides an n-gram counter for counting n-gram
 //! frequencies from sequential data.
 
+#[cfg(feature = "pyo3")]
+mod py;
+
+use crate::persistence::ModelError;
 use crate::trie::CountTrie;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+
+#[cfg(feature = "pyo3")]
+pub use py::PyNgrams;
+#[cfg(feature = "pyo3")]
+pub(crate) use py::register_module;
 
 // ---------------------------------------------------------------------------
 // BaseNgrams
@@ -64,15 +71,15 @@ pub trait BaseNgrams: Sized + Clone {
     }
 
     /// Validate that an order is within the valid range.
-    fn validate_order(&self, order: Option<usize>) -> Result<(), String> {
+    fn validate_order(&self, order: Option<usize>) -> Result<(), ModelError> {
         if let Some(k) = order
             && (k < self.min_order() || k > self.order())
         {
-            return Err(format!(
+            return Err(ModelError::ValidationError(format!(
                 "order must be between {} and {}",
                 self.min_order(),
                 self.order()
-            ));
+            )));
         }
         Ok(())
     }
@@ -82,13 +89,13 @@ pub trait BaseNgrams: Sized + Clone {
         &self,
         n: Option<usize>,
         order: Option<usize>,
-    ) -> Result<Vec<(Vec<String>, u64)>, String> {
+    ) -> Result<Vec<(Vec<String>, u64)>, ModelError> {
         self.validate_order(order)?;
         let mut pairs = self.counts().all_counts();
         if let Some(k) = order {
             pairs.retain(|(ngram, _)| ngram.len() == k);
         }
-        pairs.sort_by(|a, b| b.1.cmp(&a.1));
+        pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         if let Some(limit) = n {
             pairs.truncate(limit);
         }
@@ -96,7 +103,7 @@ pub trait BaseNgrams: Sized + Clone {
     }
 
     /// Return all (n-gram, count) pairs.
-    fn items_list(&self, order: Option<usize>) -> Result<Vec<(Vec<String>, u64)>, String> {
+    fn items_list(&self, order: Option<usize>) -> Result<Vec<(Vec<String>, u64)>, ModelError> {
         self.validate_order(order)?;
         let pairs = self.counts().all_counts();
         match order {
@@ -109,7 +116,7 @@ pub trait BaseNgrams: Sized + Clone {
     }
 
     /// Return the total number of n-gram tokens counted.
-    fn total(&self, order: Option<usize>) -> Result<u64, String> {
+    fn total(&self, order: Option<usize>) -> Result<u64, ModelError> {
         match order {
             None => Ok(self.totals().iter().sum()),
             Some(k) => {
@@ -165,16 +172,16 @@ pub trait BaseNgrams: Sized + Clone {
     }
 
     /// Add two n-gram counters together, returning a new counter.
-    fn add(&self, other: &Self) -> Result<Self, String> {
+    fn add(&self, other: &Self) -> Result<Self, ModelError> {
         if self.order() != other.order() || self.min_order() != other.min_order() {
-            return Err(format!(
+            return Err(ModelError::ValidationError(format!(
                 "Cannot add Ngrams with different orders \
                  (n={}, min_n={}) vs (n={}, min_n={})",
                 self.order(),
                 self.min_order(),
                 other.order(),
                 other.min_order()
-            ));
+            )));
         }
         let mut result = self.clone();
         for (ngram, count) in other.counts().all_counts() {
@@ -188,16 +195,16 @@ pub trait BaseNgrams: Sized + Clone {
     }
 
     /// Add another n-gram counter into this one in-place.
-    fn iadd(&mut self, other: &Self) -> Result<(), String> {
+    fn iadd(&mut self, other: &Self) -> Result<(), ModelError> {
         if self.order() != other.order() || self.min_order() != other.min_order() {
-            return Err(format!(
+            return Err(ModelError::ValidationError(format!(
                 "Cannot add Ngrams with different orders \
                  (n={}, min_n={}) vs (n={}, min_n={})",
                 self.order(),
                 self.min_order(),
                 other.order(),
                 other.min_order()
-            ));
+            )));
         }
         for (ngram, count) in other.counts().all_counts() {
             let idx = ngram.len() - self.min_order();
@@ -277,16 +284,20 @@ impl Ngrams {
     ///
     /// * `n` - The n-gram order (1 for unigrams, 2 for bigrams, etc.). Must be >= 1.
     /// * `min_n` - Minimum n-gram order. Must be >= 1 and <= n. Defaults to n.
-    pub fn new(n: usize, min_n: Option<usize>) -> Result<Self, String> {
+    pub fn new(n: usize, min_n: Option<usize>) -> Result<Self, ModelError> {
         if n < 1 {
-            return Err("n must be >= 1".to_string());
+            return Err(ModelError::ValidationError("n must be >= 1".to_string()));
         }
         let min_order = min_n.unwrap_or(n);
         if min_order < 1 {
-            return Err("min_n must be >= 1".to_string());
+            return Err(ModelError::ValidationError(
+                "min_n must be >= 1".to_string(),
+            ));
         }
         if min_order > n {
-            return Err("min_n must be <= n".to_string());
+            return Err(ModelError::ValidationError(
+                "min_n must be <= n".to_string(),
+            ));
         }
         let num_orders = n - min_order + 1;
         Ok(Self {
@@ -296,209 +307,6 @@ impl Ngrams {
             totals: vec![0u64; num_orders],
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed wrapper. Python users see this as `Ngrams`.
-#[pyclass(name = "Ngrams", from_py_object)]
-#[derive(Clone)]
-pub struct PyNgrams {
-    pub inner: Ngrams,
-}
-
-impl BaseNgrams for PyNgrams {
-    fn order(&self) -> usize {
-        self.inner.order()
-    }
-    fn min_order(&self) -> usize {
-        self.inner.min_order()
-    }
-    fn counts(&self) -> &CountTrie<String> {
-        self.inner.counts()
-    }
-    fn counts_mut(&mut self) -> &mut CountTrie<String> {
-        self.inner.counts_mut()
-    }
-    fn totals(&self) -> &Vec<u64> {
-        self.inner.totals()
-    }
-    fn totals_mut(&mut self) -> &mut Vec<u64> {
-        self.inner.totals_mut()
-    }
-    fn from_parts(
-        order: usize,
-        min_order: usize,
-        counts: CountTrie<String>,
-        totals: Vec<u64>,
-    ) -> Self {
-        Self {
-            inner: Ngrams::from_parts(order, min_order, counts, totals),
-        }
-    }
-}
-
-/// Convert n-gram pairs to a Python list of (tuple, count).
-fn pairs_to_pylist(py: Python<'_>, pairs: Vec<(Vec<String>, u64)>) -> PyResult<Py<PyAny>> {
-    let result = PyList::empty(py);
-    for (ngram, count) in pairs {
-        let tuple = PyTuple::new(py, &ngram)?;
-        result.append((tuple, count))?;
-    }
-    Ok(result.into_any().unbind())
-}
-
-#[pymethods]
-impl PyNgrams {
-    /// Create a new empty Ngrams.
-    ///
-    /// # Arguments
-    ///
-    /// * `n` - The n-gram order (1 for unigrams, 2 for bigrams, etc.). Must be >= 1.
-    #[new]
-    #[pyo3(signature = (n, *, min_n=None))]
-    fn new(n: usize, min_n: Option<usize>) -> PyResult<Self> {
-        Ngrams::new(n, min_n)
-            .map(|inner| Self { inner })
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Count n-grams from a single sequence.
-    ///
-    /// Extracts all n-grams of the configured order from the sequence
-    /// and increments their counts. N-grams do not cross sequence boundaries.
-    fn count(&mut self, seq: Vec<String>) {
-        BaseNgrams::count(self, seq);
-    }
-
-    /// Count n-grams from multiple sequences.
-    ///
-    /// Each sequence is treated independently (n-grams do not cross boundaries).
-    fn count_seqs(&mut self, seqs: Vec<Vec<String>>) {
-        BaseNgrams::count_seqs(self, seqs);
-    }
-
-    /// Return the count for a specific n-gram.
-    ///
-    /// Returns 0 if the n-gram has not been observed.
-    fn get(&self, ngram: Vec<String>) -> u64 {
-        BaseNgrams::get(self, ngram)
-    }
-
-    /// Return the n most common n-grams with their counts.
-    ///
-    /// If n is None, returns all n-grams sorted by count (descending).
-    #[pyo3(signature = (n=None, *, order=None))]
-    fn most_common(
-        &self,
-        py: Python<'_>,
-        n: Option<usize>,
-        order: Option<usize>,
-    ) -> PyResult<Py<PyAny>> {
-        let pairs = self
-            .most_common_items(n, order)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        pairs_to_pylist(py, pairs)
-    }
-
-    /// Return all (n-gram, count) pairs.
-    #[pyo3(signature = (*, order=None))]
-    fn items(&self, py: Python<'_>, order: Option<usize>) -> PyResult<Py<PyAny>> {
-        let pairs = self
-            .items_list(order)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        pairs_to_pylist(py, pairs)
-    }
-
-    /// Return the total number of n-gram tokens counted.
-    #[pyo3(signature = (*, order=None))]
-    fn total(&self, order: Option<usize>) -> PyResult<u64> {
-        BaseNgrams::total(self, order).map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// The n-gram order.
-    #[getter]
-    fn n(&self) -> usize {
-        self.order()
-    }
-
-    /// The minimum n-gram order.
-    #[getter]
-    fn min_n(&self) -> usize {
-        self.min_order()
-    }
-
-    fn __getitem__(&self, ngram: Vec<String>) -> u64 {
-        BaseNgrams::get(self, ngram)
-    }
-
-    fn __len__(&self) -> usize {
-        BaseNgrams::len(self)
-    }
-
-    fn __contains__(&self, ngram: Vec<String>) -> bool {
-        BaseNgrams::contains(self, ngram)
-    }
-
-    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let ngrams = self.all_ngrams();
-        let result = PyList::empty(py);
-        for ngram in ngrams {
-            let tuple = PyTuple::new(py, &ngram)?;
-            result.append(tuple)?;
-        }
-        Ok(result.call_method0("__iter__")?.into_any().unbind())
-    }
-
-    fn __repr__(&self) -> String {
-        self.repr_string()
-    }
-
-    fn __add__(&self, other: &PyNgrams) -> PyResult<PyNgrams> {
-        BaseNgrams::add(self, other).map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    fn __iadd__(&mut self, other: &PyNgrams) -> PyResult<()> {
-        BaseNgrams::iadd(self, other).map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Convert to a Python ``collections.Counter``.
-    ///
-    /// Returns a ``Counter`` mapping n-gram tuples to their counts.
-    #[pyo3(signature = (*, order=None))]
-    fn to_counter(&self, py: Python<'_>, order: Option<usize>) -> PyResult<Py<PyAny>> {
-        let effective_order = order.unwrap_or(self.order());
-        self.validate_order(Some(effective_order))
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let counter_type = py.import("collections")?.getattr("Counter")?;
-        let dict = PyDict::new(py);
-        for (ngram, count) in self.counts().all_counts() {
-            if ngram.len() == effective_order {
-                let tuple = PyTuple::new(py, &ngram)?;
-                dict.set_item(tuple, count)?;
-            }
-        }
-        Ok(counter_type.call1((dict,))?.unbind())
-    }
-
-    /// Clear all counts.
-    fn clear(&mut self) {
-        BaseNgrams::clear(self);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Module registration
-// ---------------------------------------------------------------------------
-
-/// Register the ngram submodule with Python.
-pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let ngram_module = PyModule::new(parent_module.py(), "ngram")?;
-    ngram_module.add_class::<PyNgrams>()?;
-    parent_module.add_submodule(&ngram_module)?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

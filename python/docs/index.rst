@@ -12,7 +12,6 @@ Rustling
       rust, python
 
 Rustling is a blazingly fast library for computational linguistics.
-It is written in Rust, with Python bindings.
 
 .. toctree::
    :maxdepth: 1
@@ -29,9 +28,23 @@ It is written in Rust, with Python bindings.
 Installation
 ------------
 
+Using pip:
+
 .. code-block:: bash
 
    pip install rustling
+
+Using conda:
+
+.. code-block:: bash
+
+   conda install -c conda-forge rustling
+
+For Pyodide, pre-built WASM wheels (with multithreading disabled, as Pyodide does not support it)
+are available from each `GitHub release <https://github.com/jacksonllee/rustling/releases>`_
+— look for the ``.whl`` file with ``emscripten`` in the filename.
+
+Rustling is also available in `Rust <https://docs.rs/rustling>`_.
 
 
 Performance
@@ -52,15 +65,15 @@ for full details and reproduction scripts.
      - vs.
    * - **Language Models**
      - Fit
-     - **10x**
+     - **11x**
      - NLTK
    * - 
      - Score
-     - **1.9x**
+     - **2x**
      - NLTK
    * - 
      - Generate
-     - **106--114x**
+     - **86--107x**
      - NLTK
    * - **Word Segmentation**
      - LongestStringMatching
@@ -72,11 +85,11 @@ for full details and reproduction scripts.
      - NLTK
    * - 
      - Tagging
-     - **18x**
+     - **17x**
      - NLTK
    * - **HMM**
      - Fit
-     - **13x**
+     - **14x**
      - hmmlearn
    * - 
      - Predict
@@ -88,19 +101,19 @@ for full details and reproduction scripts.
      - hmmlearn
    * - **CHAT Parsing**
      - Reading from a ZIP archive
-     - **43x**
+     - **30x**
      - pylangacq
-   * -
+   * - 
      - Reading from strings
-     - **70x**
+     - **35x**
      - pylangacq
-   * -
+   * - 
      - Parsing utterances
      - **15x**
      - pylangacq
-   * -
+   * - 
      - Parsing tokens
-     - **9x**
+     - **8x**
      - pylangacq
 
 

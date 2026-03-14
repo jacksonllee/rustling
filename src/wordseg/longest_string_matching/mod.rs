@@ -1,10 +1,13 @@
 //! Longest string matching word segmenter.
 
+#[cfg(feature = "pyo3")]
+mod py;
+#[cfg(feature = "pyo3")]
+pub use py::PyLongestStringMatching;
+
 use crate::trie::Trie;
 use flatbuffers;
-use pyo3::prelude::*;
 use std::io::Write;
-use std::path::PathBuf;
 
 // FlatBuffers generated code (produced by build.rs from src/wordseg/longest_string_matching/model.fbs).
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -12,7 +15,7 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/lsm/model_generated.rs"));
 }
 
-use crate::persistence::{ModelError, pathbuf_to_string};
+use crate::persistence::ModelError;
 
 // ---------------------------------------------------------------------------
 // BaseLongestStringMatching
@@ -103,6 +106,12 @@ pub trait BaseLongestStringMatching: Sized + Clone + Sync {
         }
 
         sent_predicted
+    }
+
+    /// Segment unsegmented sentences and return words with character offsets.
+    fn predict_with_offsets(&self, sent_strs: Vec<String>) -> Vec<Vec<(String, (usize, usize))>> {
+        let words = self.predict(sent_strs);
+        crate::wordseg::attach_offsets(words)
     }
 }
 
@@ -204,111 +213,17 @@ impl LongestStringMatching {
     ///
     /// * `max_word_length` - Maximum word length in the segmented sentences during prediction.
     ///   Must be >= 2 to be meaningful.
-    pub fn new(max_word_length: usize) -> Result<Self, String> {
+    pub fn new(max_word_length: usize) -> Result<Self, ModelError> {
         if max_word_length < 2 {
-            return Err(format!(
+            return Err(ModelError::ValidationError(format!(
                 "max_word_length must be >= 2 to be meaningful: {}",
                 max_word_length
-            ));
+            )));
         }
         Ok(Self {
             max_word_length,
             trie: Trie::new(),
         })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed wrapper. Python users see this as `LongestStringMatching`.
-#[pyclass(name = "LongestStringMatching", from_py_object)]
-#[derive(Clone)]
-pub struct PyLongestStringMatching {
-    pub inner: LongestStringMatching,
-}
-
-impl BaseLongestStringMatching for PyLongestStringMatching {
-    fn max_word_length(&self) -> usize {
-        self.inner.max_word_length()
-    }
-    fn trie(&self) -> &Trie<char, ()> {
-        self.inner.trie()
-    }
-    fn trie_mut(&mut self) -> &mut Trie<char, ()> {
-        self.inner.trie_mut()
-    }
-    fn from_parts(max_word_length: usize, trie: Trie<char, ()>) -> Self {
-        Self {
-            inner: LongestStringMatching::from_parts(max_word_length, trie),
-        }
-    }
-}
-
-#[pymethods]
-impl PyLongestStringMatching {
-    /// Initialize a longest string matching segmenter.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_word_length` - Maximum word length in the segmented sentences during prediction.
-    ///                       Must be >= 2 to be meaningful.
-    ///
-    /// # Raises
-    ///
-    /// * `ValueError` - If max_word_length is < 2.
-    #[new]
-    #[pyo3(signature = (*, max_word_length))]
-    fn new(max_word_length: usize) -> PyResult<Self> {
-        LongestStringMatching::new(max_word_length)
-            .map(|inner| Self { inner })
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Train the model with the input segmented sentences.
-    ///
-    /// No cleaning or preprocessing (e.g., normalizing upper/lowercase,
-    /// tokenization) is performed on the training data.
-    ///
-    /// # Arguments
-    ///
-    /// * `sents` - An iterable of segmented sentences (each sentence is a list of words).
-    fn fit(&mut self, sents: Vec<Vec<String>>) {
-        BaseLongestStringMatching::fit(self, sents);
-    }
-
-    /// Segment the given unsegmented sentences.
-    ///
-    /// # Arguments
-    ///
-    /// * `sent_strs` - An iterable of unsegmented sentences.
-    ///
-    /// # Returns
-    ///
-    /// A list of segmented sentences.
-    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        BaseLongestStringMatching::predict(self, sent_strs)
-    }
-
-    /// Save the model to a JSON file.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path where the model will be saved as a JSON file.
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.save_to_path(&path).map_err(PyErr::from)
-    }
-
-    /// Load a model from a JSON file.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path where the model, stored as a JSON file, is located.
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.load_from_path(&path).map_err(PyErr::from)
     }
 }
 

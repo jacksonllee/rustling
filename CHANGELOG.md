@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-14
+
+### Added
+
+- Word segmentation:
+   * Added `score` method for the HMM and DAG-HMM segmenters.
+   * `predict` method can optionally output offsets for the (start, end) indices
+     of segmented words compared to the original string.
+- CHAT parsing: Support custom tier names other than the standard %mor and %gra.
+- Python model classes are now subclassable.
+
+### Changed
+
+- Ngram counters: `Ngrams.most_common` now sorts tuples lexicographically
+  when counts are tied.
+- CHAT parsing:
+   * If a date is available at `Headers`'s `date`,
+     it's now a Python `datetime.date` object instead of a string.
+   * In handling the main tier transcription for creating `Token` objects:
+      - Special form markers suffixed with "@" are now stripped.
+      - Words that have partiallly parenthetical material have the parentheses
+        removed, e.g., (un)til -> until, sit(ting) -> sitting.
+   * Renamed the `CHAT.raw` attribute to `CHAT.audible` for a best-effort,
+     audibly faithful transcription string, to facilitate automatic speech recognition,
+     forced alignment, etc.
+   * A subset of the testchat/bad dataset is now used to validate CHAT data format.
+- Refactored core Rust code so that Rust-only consumers no longer need PyO3/Python.
+
 ## [0.6.0] - 2026-03-05
 
 ### Added

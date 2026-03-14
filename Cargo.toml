@@ -1,6 +1,6 @@
 [package]
 name = "rustling"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "A blazingly fast library for computational linguistics"
 license = "MIT"
@@ -21,7 +21,7 @@ name = "rustling"
 crate-type = ["rlib"]
 
 [dependencies]
-pyo3 = { version = "0.28.2", features = ["abi3-py310"] }
+pyo3 = { version = "0.28.2", features = ["abi3-py310"], optional = true }
 rand = "0.10"
 rayon = { version = "1.10", optional = true }
 fancy-regex = "0.17"
@@ -40,5 +40,5 @@ tempfile = "3"
 
 [features]
 default = ["parallel"]
-extension-module = ["pyo3/extension-module"]
+extension-module = ["pyo3", "pyo3/extension-module"]
 parallel = ["rayon"]

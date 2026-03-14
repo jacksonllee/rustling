@@ -21,16 +21,21 @@
 
 use std::collections::HashSet;
 use std::io::Write;
-use std::path::PathBuf;
 
 use flatbuffers;
-use pyo3::prelude::*;
 use rand::SeedableRng;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::rngs::StdRng;
 
 use crate::trie::CountTrie;
+
+#[cfg(feature = "pyo3")]
+mod py;
+#[cfg(feature = "pyo3")]
+pub(crate) use py::register_module;
+#[cfg(feature = "pyo3")]
+pub use py::{PyLaplace, PyLidstone, PyMLE};
 
 // FlatBuffers generated code (produced by build.rs from src/lm/model.fbs).
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -209,9 +214,11 @@ pub trait BaseLanguageModel: Sized + Clone {
     }
 
     /// Return the probability of a word given a context.
-    fn score(&self, word: String, context: Option<Vec<String>>) -> Result<f64, String> {
+    fn score(&self, word: String, context: Option<Vec<String>>) -> Result<f64, ModelError> {
         if !self.fitted() {
-            return Err("Model has not been fitted yet.".to_string());
+            return Err(ModelError::ValidationError(
+                "Model has not been fitted yet.".to_string(),
+            ));
         }
         let word = self.vocabulary().lookup(&word);
         let context: Vec<String> = context
@@ -223,16 +230,22 @@ pub trait BaseLanguageModel: Sized + Clone {
     }
 
     /// Return the probability of a word given a context, without OOV mapping.
-    fn unmasked_score(&self, word: String, context: Option<Vec<String>>) -> Result<f64, String> {
+    fn unmasked_score(
+        &self,
+        word: String,
+        context: Option<Vec<String>>,
+    ) -> Result<f64, ModelError> {
         if !self.fitted() {
-            return Err("Model has not been fitted yet.".to_string());
+            return Err(ModelError::ValidationError(
+                "Model has not been fitted yet.".to_string(),
+            ));
         }
         let context = context.unwrap_or_default();
         Ok(self.compute_score(&word, &context))
     }
 
     /// Return the log (base 2) probability of a word given a context.
-    fn logscore(&self, word: String, context: Option<Vec<String>>) -> Result<f64, String> {
+    fn logscore(&self, word: String, context: Option<Vec<String>>) -> Result<f64, ModelError> {
         let s = self.score(word, context)?;
         if s == 0.0 {
             Ok(f64::NEG_INFINITY)
@@ -251,9 +264,11 @@ pub trait BaseLanguageModel: Sized + Clone {
         num_words: usize,
         text_seed: Option<Vec<String>>,
         random_seed: Option<u64>,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, ModelError> {
         if !self.fitted() {
-            return Err("Model has not been fitted yet.".to_string());
+            return Err(ModelError::ValidationError(
+                "Model has not been fitted yet.".to_string(),
+            ));
         }
 
         let mut rng: Box<dyn rand::Rng> = match random_seed {
@@ -285,8 +300,8 @@ pub trait BaseLanguageModel: Sized + Clone {
             let words: Vec<String> = children.iter().map(|(w, _)| w.clone()).collect();
             let weights: Vec<f64> = children.iter().map(|(_, c)| *c as f64).collect();
 
-            let dist =
-                WeightedIndex::new(&weights).map_err(|e| format!("Sampling error: {}", e))?;
+            let dist = WeightedIndex::new(&weights)
+                .map_err(|e| ModelError::ValidationError(format!("Sampling error: {}", e)))?;
 
             let idx = dist.sample(&mut *rng);
             let word = words[idx].clone();
@@ -443,7 +458,7 @@ fn load_lm_flatbuffers<T: BaseLanguageModel>(lm: &mut T, bytes: &[u8]) -> Result
     Ok(())
 }
 
-use crate::persistence::{ModelError, pathbuf_to_string};
+use crate::persistence::ModelError;
 
 // ---------------------------------------------------------------------------
 // Pure Rust structs
@@ -497,9 +512,11 @@ impl MLE {
     /// # Arguments
     ///
     /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
-    pub fn new(order: usize) -> Result<Self, String> {
+    pub fn new(order: usize) -> Result<Self, ModelError> {
         if order < 1 {
-            return Err("order must be >= 1".to_string());
+            return Err(ModelError::ValidationError(
+                "order must be >= 1".to_string(),
+            ));
         }
         Ok(Self {
             order,
@@ -561,12 +578,14 @@ impl Lidstone {
     ///
     /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
     /// * `gamma` - The smoothing parameter. Must be > 0.
-    pub fn new(order: usize, gamma: f64) -> Result<Self, String> {
+    pub fn new(order: usize, gamma: f64) -> Result<Self, ModelError> {
         if order < 1 {
-            return Err("order must be >= 1".to_string());
+            return Err(ModelError::ValidationError(
+                "order must be >= 1".to_string(),
+            ));
         }
         if gamma <= 0.0 {
-            return Err("gamma must be > 0".to_string());
+            return Err(ModelError::ValidationError("gamma must be > 0".to_string()));
         }
         Ok(Self {
             order,
@@ -632,9 +651,11 @@ impl Laplace {
     /// # Arguments
     ///
     /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
-    pub fn new(order: usize) -> Result<Self, String> {
+    pub fn new(order: usize) -> Result<Self, ModelError> {
         if order < 1 {
-            return Err("order must be >= 1".to_string());
+            return Err(ModelError::ValidationError(
+                "order must be >= 1".to_string(),
+            ));
         }
         Ok(Self {
             order,
@@ -644,369 +665,6 @@ impl Laplace {
             fitted: false,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 wrappers
-// ---------------------------------------------------------------------------
-
-/// Python-exposed MLE language model.
-#[pyclass(name = "MLE", from_py_object)]
-#[derive(Clone)]
-pub struct PyMLE {
-    pub inner: MLE,
-}
-
-impl BaseLanguageModel for PyMLE {
-    fn order(&self) -> usize {
-        self.inner.order()
-    }
-    fn smoothing(&self) -> &Smoothing {
-        self.inner.smoothing()
-    }
-    fn smoothing_name(&self) -> &str {
-        self.inner.smoothing_name()
-    }
-    fn vocabulary(&self) -> &Vocabulary {
-        self.inner.vocabulary()
-    }
-    fn vocabulary_mut(&mut self) -> &mut Vocabulary {
-        self.inner.vocabulary_mut()
-    }
-    fn counts(&self) -> &CountTrie<String> {
-        self.inner.counts()
-    }
-    fn counts_mut(&mut self) -> &mut CountTrie<String> {
-        self.inner.counts_mut()
-    }
-    fn fitted(&self) -> bool {
-        self.inner.fitted()
-    }
-    fn set_fitted(&mut self, fitted: bool) {
-        self.inner.set_fitted(fitted);
-    }
-}
-
-#[pymethods]
-impl PyMLE {
-    /// Initialize an MLE language model.
-    ///
-    /// # Arguments
-    ///
-    /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
-    #[new]
-    #[pyo3(signature = (*, order))]
-    fn new(order: usize) -> PyResult<Self> {
-        let inner = MLE::new(order).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(Self { inner })
-    }
-
-    /// Train the language model on tokenized sentences.
-    fn fit(&mut self, sents: Vec<Vec<String>>) {
-        BaseLanguageModel::fit(self, sents);
-    }
-
-    /// Return the probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the probability of a word given a context, without OOV mapping.
-    #[pyo3(signature = (word, context=None))]
-    fn unmasked_score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::unmasked_score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the log (base 2) probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn logscore(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::logscore(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Generate words from the language model.
-    #[pyo3(signature = (*, num_words = 1, text_seed = None, random_seed = None))]
-    fn generate(
-        &self,
-        num_words: usize,
-        text_seed: Option<Vec<String>>,
-        random_seed: Option<u64>,
-    ) -> PyResult<Vec<String>> {
-        BaseLanguageModel::generate(self, num_words, text_seed, random_seed)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// The order of the n-gram model.
-    #[getter]
-    fn order(&self) -> usize {
-        BaseLanguageModel::order(self)
-    }
-
-    /// The vocabulary size (including special tokens).
-    #[getter]
-    fn vocab_size(&self) -> usize {
-        BaseLanguageModel::vocab_size(self)
-    }
-
-    /// Save the model to a zstd-compressed FlatBuffers binary.
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.save_to_path(&path).map_err(PyErr::from)
-    }
-
-    /// Load a model from a zstd-compressed FlatBuffers binary.
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.load_from_path(&path).map_err(PyErr::from)
-    }
-}
-
-/// Python-exposed Lidstone language model.
-#[pyclass(name = "Lidstone", from_py_object)]
-#[derive(Clone)]
-pub struct PyLidstone {
-    pub inner: Lidstone,
-}
-
-impl BaseLanguageModel for PyLidstone {
-    fn order(&self) -> usize {
-        self.inner.order()
-    }
-    fn smoothing(&self) -> &Smoothing {
-        self.inner.smoothing()
-    }
-    fn smoothing_name(&self) -> &str {
-        self.inner.smoothing_name()
-    }
-    fn vocabulary(&self) -> &Vocabulary {
-        self.inner.vocabulary()
-    }
-    fn vocabulary_mut(&mut self) -> &mut Vocabulary {
-        self.inner.vocabulary_mut()
-    }
-    fn counts(&self) -> &CountTrie<String> {
-        self.inner.counts()
-    }
-    fn counts_mut(&mut self) -> &mut CountTrie<String> {
-        self.inner.counts_mut()
-    }
-    fn fitted(&self) -> bool {
-        self.inner.fitted()
-    }
-    fn set_fitted(&mut self, fitted: bool) {
-        self.inner.set_fitted(fitted);
-    }
-}
-
-#[pymethods]
-impl PyLidstone {
-    /// Initialize a Lidstone language model.
-    ///
-    /// # Arguments
-    ///
-    /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
-    /// * `gamma` - The smoothing parameter. Must be > 0.
-    #[new]
-    #[pyo3(signature = (*, order, gamma))]
-    fn new(order: usize, gamma: f64) -> PyResult<Self> {
-        let inner = Lidstone::new(order, gamma).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(Self { inner })
-    }
-
-    /// Train the language model on tokenized sentences.
-    fn fit(&mut self, sents: Vec<Vec<String>>) {
-        BaseLanguageModel::fit(self, sents);
-    }
-
-    /// Return the probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the probability of a word given a context, without OOV mapping.
-    #[pyo3(signature = (word, context=None))]
-    fn unmasked_score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::unmasked_score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the log (base 2) probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn logscore(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::logscore(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Generate words from the language model.
-    #[pyo3(signature = (*, num_words = 1, text_seed = None, random_seed = None))]
-    fn generate(
-        &self,
-        num_words: usize,
-        text_seed: Option<Vec<String>>,
-        random_seed: Option<u64>,
-    ) -> PyResult<Vec<String>> {
-        BaseLanguageModel::generate(self, num_words, text_seed, random_seed)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// The order of the n-gram model.
-    #[getter]
-    fn order(&self) -> usize {
-        BaseLanguageModel::order(self)
-    }
-
-    /// The vocabulary size (including special tokens).
-    #[getter]
-    fn vocab_size(&self) -> usize {
-        BaseLanguageModel::vocab_size(self)
-    }
-
-    /// The gamma (smoothing) parameter.
-    #[getter]
-    fn gamma(&self) -> f64 {
-        self.inner.gamma()
-    }
-
-    /// Save the model to a zstd-compressed FlatBuffers binary.
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.save_to_path(&path).map_err(PyErr::from)
-    }
-
-    /// Load a model from a zstd-compressed FlatBuffers binary.
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.load_from_path(&path).map_err(PyErr::from)
-    }
-}
-
-/// Python-exposed Laplace language model.
-#[pyclass(name = "Laplace", from_py_object)]
-#[derive(Clone)]
-pub struct PyLaplace {
-    pub inner: Laplace,
-}
-
-impl BaseLanguageModel for PyLaplace {
-    fn order(&self) -> usize {
-        self.inner.order()
-    }
-    fn smoothing(&self) -> &Smoothing {
-        self.inner.smoothing()
-    }
-    fn smoothing_name(&self) -> &str {
-        self.inner.smoothing_name()
-    }
-    fn vocabulary(&self) -> &Vocabulary {
-        self.inner.vocabulary()
-    }
-    fn vocabulary_mut(&mut self) -> &mut Vocabulary {
-        self.inner.vocabulary_mut()
-    }
-    fn counts(&self) -> &CountTrie<String> {
-        self.inner.counts()
-    }
-    fn counts_mut(&mut self) -> &mut CountTrie<String> {
-        self.inner.counts_mut()
-    }
-    fn fitted(&self) -> bool {
-        self.inner.fitted()
-    }
-    fn set_fitted(&mut self, fitted: bool) {
-        self.inner.set_fitted(fitted);
-    }
-}
-
-#[pymethods]
-impl PyLaplace {
-    /// Initialize a Laplace language model.
-    ///
-    /// # Arguments
-    ///
-    /// * `order` - The order of the n-gram model (e.g., 2 for bigram). Must be >= 1.
-    #[new]
-    #[pyo3(signature = (*, order))]
-    fn new(order: usize) -> PyResult<Self> {
-        let inner = Laplace::new(order).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(Self { inner })
-    }
-
-    /// Train the language model on tokenized sentences.
-    fn fit(&mut self, sents: Vec<Vec<String>>) {
-        BaseLanguageModel::fit(self, sents);
-    }
-
-    /// Return the probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the probability of a word given a context, without OOV mapping.
-    #[pyo3(signature = (word, context=None))]
-    fn unmasked_score(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::unmasked_score(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Return the log (base 2) probability of a word given a context.
-    #[pyo3(signature = (word, context=None))]
-    fn logscore(&self, word: String, context: Option<Vec<String>>) -> PyResult<f64> {
-        BaseLanguageModel::logscore(self, word, context)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Generate words from the language model.
-    #[pyo3(signature = (*, num_words = 1, text_seed = None, random_seed = None))]
-    fn generate(
-        &self,
-        num_words: usize,
-        text_seed: Option<Vec<String>>,
-        random_seed: Option<u64>,
-    ) -> PyResult<Vec<String>> {
-        BaseLanguageModel::generate(self, num_words, text_seed, random_seed)
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// The order of the n-gram model.
-    #[getter]
-    fn order(&self) -> usize {
-        BaseLanguageModel::order(self)
-    }
-
-    /// The vocabulary size (including special tokens).
-    #[getter]
-    fn vocab_size(&self) -> usize {
-        BaseLanguageModel::vocab_size(self)
-    }
-
-    /// Save the model to a zstd-compressed FlatBuffers binary.
-    fn save(&self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.save_to_path(&path).map_err(PyErr::from)
-    }
-
-    /// Load a model from a zstd-compressed FlatBuffers binary.
-    fn load(&mut self, path: PathBuf) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.load_from_path(&path).map_err(PyErr::from)
-    }
-}
-
-/// Register the lm submodule with Python.
-pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let lm_module = PyModule::new(parent_module.py(), "lm")?;
-    lm_module.add_class::<PyMLE>()?;
-    lm_module.add_class::<PyLidstone>()?;
-    lm_module.add_class::<PyLaplace>()?;
-    parent_module.add_submodule(&lm_module)?;
-    Ok(())
 }
 
 #[cfg(test)]

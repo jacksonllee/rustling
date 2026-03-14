@@ -1,6 +1,6 @@
 //! Random word segmenter.
 
-use pyo3::prelude::*;
+use crate::persistence::ModelError;
 use rand::RngExt;
 
 // ---------------------------------------------------------------------------
@@ -59,6 +59,12 @@ pub trait BaseRandomSegmenter: Sized + Clone {
 
         sent
     }
+
+    /// Segment unsegmented sentences and return words with character offsets.
+    fn predict_with_offsets(&self, sent_strs: Vec<String>) -> Vec<Vec<(String, (usize, usize))>> {
+        let words = self.predict(sent_strs);
+        crate::wordseg::attach_offsets(words)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,67 +98,14 @@ impl RandomSegmenter {
     ///
     /// * `prob` - The probability from [0, 1) that segmentation occurs between
     ///   two symbols.
-    pub fn new(prob: f64) -> Result<Self, String> {
+    pub fn new(prob: f64) -> Result<Self, ModelError> {
         if !(0.0..1.0).contains(&prob) {
-            return Err(format!("prob must be from [0, 1): {}", prob));
+            return Err(ModelError::ValidationError(format!(
+                "prob must be from [0, 1): {}",
+                prob
+            )));
         }
         Ok(Self { prob })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// PyO3 wrapper
-// ---------------------------------------------------------------------------
-
-/// Python-exposed wrapper. Python users see this as `RandomSegmenter`.
-#[pyclass(name = "RandomSegmenter", from_py_object)]
-#[derive(Clone)]
-pub struct PyRandomSegmenter {
-    pub inner: RandomSegmenter,
-}
-
-impl BaseRandomSegmenter for PyRandomSegmenter {
-    fn prob(&self) -> f64 {
-        self.inner.prob()
-    }
-    fn from_prob(prob: f64) -> Self {
-        Self {
-            inner: RandomSegmenter::from_prob(prob),
-        }
-    }
-}
-
-#[pymethods]
-impl PyRandomSegmenter {
-    /// Initialize a random segmenter.
-    ///
-    /// # Arguments
-    ///
-    /// * `prob` - The probability from [0, 1) that segmentation occurs between
-    ///            two symbols.
-    ///
-    /// # Raises
-    ///
-    /// * `ValueError` - If prob is outside [0, 1).
-    #[new]
-    #[pyo3(signature = (*, prob))]
-    fn new(prob: f64) -> PyResult<Self> {
-        RandomSegmenter::new(prob)
-            .map(|inner| Self { inner })
-            .map_err(pyo3::exceptions::PyValueError::new_err)
-    }
-
-    /// Segment the given unsegmented sentences.
-    ///
-    /// # Arguments
-    ///
-    /// * `sent_strs` - An iterable of unsegmented sentences.
-    ///
-    /// # Returns
-    ///
-    /// A list of segmented sentences.
-    fn predict(&self, sent_strs: Vec<String>) -> Vec<Vec<String>> {
-        BaseRandomSegmenter::predict(self, sent_strs)
     }
 }
 

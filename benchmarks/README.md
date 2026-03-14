@@ -51,7 +51,7 @@ uv sync --group benchmarks
 
 All benchmarks degrade gracefully if a comparison library is not installed.
 
-For benchmark results, see the [performance page](https://rustling.readthedocs.io/#performance).
+For benchmark results, see the [performance page](https://docs.rustling.io/#performance).
 
 ---
 

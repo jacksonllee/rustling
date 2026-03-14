@@ -80,3 +80,34 @@ def test_segments_preserve_content():
     for inp, segments in zip(inputs, results):
         # Join segments back together
         assert "".join(segments) == inp
+
+
+def test_predict_offsets():
+    """Test predict with offsets=True."""
+    segmenter = RandomSegmenter(prob=0.0)
+    result = segmenter.predict(["hello"], offsets=True)
+    assert result == [[("hello", (0, 5))]]
+
+
+def test_predict_offsets_preserves_content():
+    """Test that offsets correctly index into the original string."""
+    segmenter = RandomSegmenter(prob=0.5)
+    input_str = "你好世界"
+    result = segmenter.predict([input_str], offsets=True)
+    assert len(result) == 1
+    for word, (start, end) in result[0]:
+        assert input_str[start:end] == word
+
+
+def test_predict_offsets_false_unchanged():
+    """Test that offsets=False returns plain strings."""
+    segmenter = RandomSegmenter(prob=0.0)
+    result = segmenter.predict(["hello"], offsets=False)
+    assert result == [["hello"]]
+
+
+def test_predict_offsets_empty():
+    """Test predict with offsets=True on empty input."""
+    segmenter = RandomSegmenter(prob=0.5)
+    assert segmenter.predict([], offsets=True) == []
+    assert segmenter.predict([""], offsets=True) == [[]]

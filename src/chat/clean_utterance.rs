@@ -13,6 +13,15 @@ use std::sync::LazyLock;
 // Segment types produced by the tokenizer
 // ---------------------------------------------------------------------------
 
+/// Controls whether the cleaning pipeline produces tokens for linguistic
+/// analysis ([`Clean`](Mode::Clean)) or an audibly faithful transcription
+/// ([`Audible`](Mode::Audible)).
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Clean,
+    Audible,
+}
+
 enum Segment {
     /// A regular word or punctuation token.
     Word(String),
@@ -26,9 +35,12 @@ enum Segment {
     KeepOriginal,
     /// `[/]`, `[//]`, `[///]`, `[/?]`, `[/-]` — drop the preceding Word/AngleGroup.
     Retracing,
+    /// `[x N]` — repeat the preceding Word/AngleGroup N times total (audible mode).
+    Expand(usize),
 }
 
 /// Intermediate output during the processing pass.
+#[derive(Clone)]
 enum OutputItem {
     Word(String),
     Group(Vec<String>),
@@ -104,10 +116,19 @@ fn should_start_angle_group(chars: &[char], pos: usize, word_buf: &str) -> bool 
 }
 
 /// Classify the text between `[` and `]` into a [`Segment`].
-fn classify_bracket(content: &str) -> Segment {
+///
+/// In [`Mode::Audible`], retracings become no-ops (preceding material is kept),
+/// replacements keep the original word, and `[x N]` expands repetitions.
+fn classify_bracket(content: &str, mode: Mode) -> Segment {
     // Standalone codes (exact match after trimming).
     match content.trim() {
-        "/" | "//" | "///" | "/?" | "/-" | "e" => return Segment::Retracing,
+        "/" | "//" | "///" | "/?" | "/-" | "e" => {
+            return match mode {
+                Mode::Clean => Segment::Retracing,
+                // Audible: keep preceding material — just drop the bracket.
+                Mode::Audible => Segment::Drop,
+            };
+        }
         "?" | "!" | "!!" | "^c" | "*" => return Segment::Drop,
         _ => {}
     }
@@ -129,12 +150,18 @@ fn classify_bracket(content: &str) -> Segment {
         return Segment::KeepOriginal;
     }
     if let Some(rest) = content.strip_prefix(": ") {
-        let words: Vec<String> = rest.split_whitespace().map(String::from).collect();
-        return Segment::Replace(words);
+        return match mode {
+            Mode::Clean => {
+                let words: Vec<String> = rest.split_whitespace().map(String::from).collect();
+                Segment::Replace(words)
+            }
+            // Audible: keep original word, discard replacement.
+            Mode::Audible => Segment::KeepOriginal,
+        };
     }
 
     // Drop patterns: [= …], [+ …], [* …], [% …], [- …], [^ …], [# …],
-    // [=? …], [=! …], [x N], [%act: …].
+    // [=? …], [=! …], [%act: …].
     if content.starts_with("= ")
         || content.starts_with("=? ")
         || content.starts_with("=! ")
@@ -144,9 +171,20 @@ fn classify_bracket(content: &str) -> Segment {
         || content.starts_with("- ")
         || content.starts_with("^ ")
         || content.starts_with("# ")
-        || content.starts_with("x ")
         || content.starts_with("%act: ")
     {
+        return Segment::Drop;
+    }
+
+    // [x N] — repetition count.
+    if let Some(rest) = content.strip_prefix("x ") {
+        if let Ok(n) = rest.trim().parse::<usize>() {
+            return match mode {
+                Mode::Clean => Segment::Drop,
+                Mode::Audible => Segment::Expand(n),
+            };
+        }
+        // Unparseable — fall through to drop.
         return Segment::Drop;
     }
 
@@ -198,7 +236,7 @@ fn is_timed_pause(content: &str) -> bool {
 }
 
 /// Tokenize a CHAT utterance string into structural segments.
-fn tokenize(input: &str) -> Vec<Segment> {
+fn tokenize(input: &str, mode: Mode) -> Vec<Segment> {
     let chars: Vec<char> = input.chars().collect();
     let len = chars.len();
     let mut segments: Vec<Segment> = Vec::new();
@@ -231,7 +269,7 @@ fn tokenize(input: &str) -> Vec<Segment> {
                 if i < len {
                     i += 1;
                 }
-                segments.push(classify_bracket(&content));
+                segments.push(classify_bracket(&content, mode));
             }
 
             // Angle bracket: multi-word scoping group.
@@ -276,7 +314,7 @@ fn tokenize(input: &str) -> Vec<Segment> {
                         }
                     }
                 }
-                let inner_segments = tokenize(&content);
+                let inner_segments = tokenize(&content, mode);
                 let words = process(&inner_segments);
                 if !words.is_empty() {
                     segments.push(Segment::AngleGroup(words));
@@ -386,6 +424,14 @@ fn process(segments: &[Segment]) -> Vec<String> {
                     output.remove(pos);
                 }
             }
+            Segment::Expand(n) => {
+                // Repeat the most recent Word/AngleGroup n times total.
+                if let Some(item) = output.last().cloned() {
+                    for _ in 1..*n {
+                        output.push(item.clone());
+                    }
+                }
+            }
         }
         i += 1;
     }
@@ -442,7 +488,18 @@ fn filter_words(words: Vec<String>) -> Vec<String> {
             && !ESCAPE_PREFIXES.iter().any(|e| word.starts_with(e))
             && !ESCAPE_SUFFIXES.iter().any(|e| word.ends_with(e))
         {
-            result.push(word.to_string());
+            // Strip CHAT special form markers (@b, @c, @o, @s:hu, etc.).
+            // The @ and everything after it is metadata, not part of the word.
+            // In CHAT, @ cannot be the first character of a main-tier word.
+            let word = match word.find('@') {
+                Some(pos) => &word[..pos],
+                None => word,
+            };
+            // Strip parentheses (e.g., "(un)til" → "until", "sit(ting)" → "sitting").
+            let word: String = word.chars().filter(|&c| c != '(' && c != ')').collect();
+            if !word.is_empty() {
+                result.push(word);
+            }
         }
     }
     result
@@ -473,9 +530,178 @@ fn split_trailing_punct(words: &mut Vec<String>) {
 
 /// Clean a CHAT utterance by removing annotations and normalizing text.
 pub(crate) fn clean_utterance(utterance: &str) -> String {
-    let segments = tokenize(utterance);
+    let segments = tokenize(utterance, Mode::Clean);
     let words = process(&segments);
     let mut words = filter_words(words);
+    split_trailing_punct(&mut words);
+    words.join(" ")
+}
+
+// ---------------------------------------------------------------------------
+// Audible utterance — keeps what was actually spoken
+// ---------------------------------------------------------------------------
+
+/// Escape words that are still dropped in audible mode.
+/// Compared to [`ESCAPE_WORDS`], this keeps `xxx`, `yyy`, `www` and their
+/// suffixed variants (audible unidentifiable material).
+static AUDIBLE_ESCAPE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    [
+        "0", "++", "+<", "+^", "(.)", "(..)", "(...)", ":", ";", ";;", "<", ">", "xx", "yy",
+        "\u{2192}", // →
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// Clean section-13 disfluency markers from a single word.
+///
+/// - Colon between two alphabetic chars: `s:paghetti` → `spaghetti`
+/// - Caret: `spa^ghetti` → `spaghetti`
+/// - `≠` (U+2260) prefix: `≠butter` → `butter`
+/// - Paired `↫` (U+21AB): `like↫ike-ike↫` → `like` (content between
+///   matched `↫` pairs is removed; unpaired `↫` is kept as-is)
+fn clean_disfluency(word: &str) -> String {
+    let mut result = String::with_capacity(word.len());
+
+    // Strip ≠ prefix.
+    let word = word.strip_prefix('\u{2260}').unwrap_or(word);
+
+    // Handle paired ↫ markers.
+    let word = {
+        let first = word.find('\u{21ab}');
+        let last = word.rfind('\u{21ab}');
+        match (first, last) {
+            (Some(f), Some(l)) if f != l => {
+                // Paired: keep content before first ↫ and after last ↫.
+                let before = &word[..f];
+                let after = &word[l + '\u{21ab}'.len_utf8()..];
+                std::borrow::Cow::Owned(format!("{before}{after}"))
+            }
+            _ => std::borrow::Cow::Borrowed(word),
+        }
+    };
+
+    // Process remaining characters.
+    let chars: Vec<char> = word.chars().collect();
+    let len = chars.len();
+    for (i, &ch) in chars.iter().enumerate() {
+        match ch {
+            // Caret: always strip.
+            '^' => {}
+            // Colon: strip only when between two alphabetic characters.
+            ':' if i > 0
+                && i + 1 < len
+                && chars[i - 1].is_alphabetic()
+                && chars[i + 1].is_alphabetic() => {}
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+/// Filter and clean individual words for audible output.
+///
+/// Compared to [`filter_words`], this keeps unidentifiable material (`xxx`,
+/// `yyy`, `www`), converts fragments/fillers (`&-uh` → `uh`), keeps simple
+/// events (`&=laughs`) but drops action-only ones (`&=imit:baby`), and
+/// removes parenthesized content (the inaudible part) rather than the
+/// parentheses alone.
+fn filter_words_audible(words: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for raw in words {
+        let word = clean_word_boundaries(&raw);
+        if word.is_empty() {
+            continue;
+        }
+        // Keep certain prefixed words.
+        if KEEP_PREFIXES.iter().any(|k| word.starts_with(k)) {
+            result.push(word.to_string());
+            continue;
+        }
+        // Filter out omitted words (0-prefixed, e.g., 0you, 0the, 0學).
+        if word.starts_with('0') && word[1..].starts_with(|c: char| c.is_alphabetic()) {
+            continue;
+        }
+
+        // Handle &-prefixed words specially for audible mode.
+        if let Some(after_amp) = word.strip_prefix('&') {
+            // &=X:Y (action-only simple events like &=imit:baby) — drop.
+            if let Some(after_eq) = after_amp.strip_prefix('=') {
+                if after_eq.contains(':') {
+                    continue; // Non-audible action — drop.
+                }
+                // &=X (no colon, e.g., &=laughs) — keep as-is.
+                let cleaned = clean_disfluency(word);
+                if !cleaned.is_empty() {
+                    result.push(cleaned);
+                }
+                continue;
+            }
+            // &+X, &-X, &~X — strip prefix marker and &.
+            // &X (bare) — strip &.
+            let rest = after_amp;
+            let rest = rest
+                .strip_prefix('+')
+                .or_else(|| rest.strip_prefix('-'))
+                .or_else(|| rest.strip_prefix('~'))
+                .unwrap_or(rest);
+            if !rest.is_empty() {
+                // Strip @ markers and apply disfluency cleaning.
+                let rest = match rest.find('@') {
+                    Some(pos) => &rest[..pos],
+                    None => rest,
+                };
+                let cleaned = clean_disfluency(rest);
+                if !cleaned.is_empty() {
+                    result.push(cleaned);
+                }
+            }
+            continue;
+        }
+
+        // Filter out escape words, prefixes (except &, handled above), and suffixes.
+        let non_amp_escape_prefixes: &[&str] =
+            &["[?", "[/", "[<", "[>", "[:", "[!", "[*", "+\"", "+,", "<&"];
+        if !AUDIBLE_ESCAPE_WORDS.contains(word)
+            && !non_amp_escape_prefixes.iter().any(|e| word.starts_with(e))
+            && !ESCAPE_SUFFIXES.iter().any(|e| word.ends_with(e))
+        {
+            // Strip CHAT special form markers (@b, @c, @o, @s:hu, etc.).
+            let word = match word.find('@') {
+                Some(pos) => &word[..pos],
+                None => word,
+            };
+            // Remove parenthesized content (the inaudible part).
+            // E.g., "(un)til" → "til", "sit(ting)" → "sit".
+            let mut cleaned = String::with_capacity(word.len());
+            let mut in_parens = false;
+            for ch in word.chars() {
+                match ch {
+                    '(' => in_parens = true,
+                    ')' => in_parens = false,
+                    _ if !in_parens => cleaned.push(ch),
+                    _ => {}
+                }
+            }
+            let cleaned = clean_disfluency(&cleaned);
+            if !cleaned.is_empty() {
+                result.push(cleaned);
+            }
+        }
+    }
+    result
+}
+
+/// Produce an audibly faithful transcription of a CHAT utterance.
+///
+/// Unlike [`clean_utterance`], this preserves what was actually spoken:
+/// repeated/retraced material is kept, unidentifiable material (`xxx`, `yyy`,
+/// `www`) is kept, fragments/fillers are included (with prefix markers
+/// stripped), and `[x N]` repetitions are expanded.
+pub(crate) fn audible_utterance(utterance: &str) -> String {
+    let segments = tokenize(utterance, Mode::Audible);
+    let words = process(&segments);
+    let mut words = filter_words_audible(words);
     split_trailing_punct(&mut words);
     words.join(" ")
 }
@@ -735,6 +961,27 @@ mod tests {
     }
 
     #[test]
+    fn test_special_form_markers_stripped() {
+        assert_eq!(clean_utterance("bingbing@c ."), "bingbing .");
+        assert_eq!(clean_utterance("woofwoof@o ."), "woofwoof .");
+        assert_eq!(clean_utterance("istenem@s:hu ."), "istenem .");
+        assert_eq!(clean_utterance("um@fp ."), "um .");
+        assert_eq!(clean_utterance("b@l ."), "b .");
+        assert_eq!(clean_utterance("wug@t ."), "wug .");
+        assert_eq!(
+            clean_utterance("I got a bingbing@c ."),
+            "I got a bingbing ."
+        );
+    }
+
+    #[test]
+    fn test_parentheses_stripped() {
+        assert_eq!(clean_utterance("(un)til the end ."), "until the end .");
+        assert_eq!(clean_utterance("sit(ting) down ."), "sitting down .");
+        assert_eq!(clean_utterance("(be)cause ."), "because .");
+    }
+
+    #[test]
     fn test_is_timed_pause() {
         assert!(is_timed_pause("1"));
         assert!(is_timed_pause("1.5"));
@@ -747,5 +994,228 @@ mod tests {
         assert!(!is_timed_pause("..."));
         assert!(!is_timed_pause("abc"));
         assert!(!is_timed_pause(":5"));
+    }
+
+    // -----------------------------------------------------------------------
+    // audible_utterance tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_audible_simple() {
+        assert_eq!(audible_utterance("I want cookie ."), "I want cookie .");
+    }
+
+    #[test]
+    fn test_audible_keeps_xxx() {
+        assert_eq!(audible_utterance("xxx ."), "xxx .");
+        assert_eq!(audible_utterance("yyy ."), "yyy .");
+        assert_eq!(audible_utterance("www ."), "www .");
+    }
+
+    #[test]
+    fn test_audible_drops_xx() {
+        // xx and yy are still escape words in audible mode.
+        assert_eq!(audible_utterance("xx ."), ".");
+        assert_eq!(audible_utterance("yy ."), ".");
+    }
+
+    #[test]
+    fn test_audible_keeps_repetition() {
+        assert_eq!(audible_utterance("the [/] the dog ."), "the the dog .");
+    }
+
+    #[test]
+    fn test_audible_keeps_repetition_angle_group() {
+        assert_eq!(
+            audible_utterance("< I wanted > [/] I wanted to invite Margie ."),
+            "I wanted I wanted to invite Margie ."
+        );
+    }
+
+    #[test]
+    fn test_audible_keeps_retracing() {
+        assert_eq!(
+            audible_utterance("< I wanted > [//] blah blah blah ."),
+            "I wanted blah blah blah ."
+        );
+    }
+
+    #[test]
+    fn test_audible_keeps_reformulation() {
+        assert_eq!(audible_utterance("I [///] she went ."), "I she went .");
+    }
+
+    #[test]
+    fn test_audible_keeps_false_start() {
+        assert_eq!(
+            audible_utterance("want [/-] I need cookie ."),
+            "want I need cookie ."
+        );
+    }
+
+    #[test]
+    fn test_audible_keeps_excluded() {
+        assert_eq!(
+            audible_utterance("this is a mor [e] exclude ."),
+            "this is a mor exclude ."
+        );
+    }
+
+    #[test]
+    fn test_audible_expansion() {
+        assert_eq!(audible_utterance("want [x 3] ."), "want want want .");
+    }
+
+    #[test]
+    fn test_audible_expansion_single() {
+        assert_eq!(audible_utterance("want [x 1] ."), "want .");
+    }
+
+    #[test]
+    fn test_audible_replacement_keeps_original() {
+        // [: replacement] keeps original in audible mode.
+        assert_eq!(audible_utterance("goed [: went] ."), "goed .");
+    }
+
+    #[test]
+    fn test_audible_keep_original_unchanged() {
+        // [:: ...] keeps original in both modes.
+        assert_eq!(audible_utterance("goed [:: went] ."), "goed .");
+    }
+
+    #[test]
+    fn test_audible_fragment_prefix_minus() {
+        assert_eq!(audible_utterance("&-uh hello ."), "uh hello .");
+    }
+
+    #[test]
+    fn test_audible_fragment_prefix_plus() {
+        assert_eq!(audible_utterance("&+um hello ."), "um hello .");
+    }
+
+    #[test]
+    fn test_audible_fragment_prefix_tilde() {
+        assert_eq!(audible_utterance("&~hey hello ."), "hey hello .");
+    }
+
+    #[test]
+    fn test_audible_fragment_bare_ampersand() {
+        assert_eq!(audible_utterance("&um hello ."), "um hello .");
+    }
+
+    #[test]
+    fn test_audible_simple_event_kept() {
+        assert_eq!(audible_utterance("&=laughs hello ."), "&=laughs hello .");
+    }
+
+    #[test]
+    fn test_audible_simple_event_action_dropped() {
+        // &=imit:baby has the &=X:Y form — non-audible action.
+        assert_eq!(audible_utterance("&=imit:baby hello ."), "hello .");
+        assert_eq!(audible_utterance("&=ges:ignore hello ."), "hello .");
+    }
+
+    #[test]
+    fn test_audible_paren_content_removed() {
+        // Audible removes parenthesized content (the inaudible part).
+        assert_eq!(audible_utterance("(un)til the end ."), "til the end .");
+        assert_eq!(audible_utterance("sit(ting) down ."), "sit down .");
+        assert_eq!(audible_utterance("(be)cause ."), "cause .");
+    }
+
+    #[test]
+    fn test_audible_disfluency_colon() {
+        assert_eq!(audible_utterance("s:paghetti ."), "spaghetti .");
+    }
+
+    #[test]
+    fn test_audible_disfluency_caret() {
+        assert_eq!(audible_utterance("spa^ghetti ."), "spaghetti .");
+    }
+
+    #[test]
+    fn test_audible_disfluency_not_equal() {
+        assert_eq!(audible_utterance("\u{2260}butter ."), "butter .");
+    }
+
+    #[test]
+    fn test_audible_disfluency_leftwards_arrow_paired() {
+        assert_eq!(audible_utterance("like\u{21ab}ike-ike\u{21ab} ."), "like .");
+    }
+
+    #[test]
+    fn test_audible_disfluency_leftwards_arrow_unpaired() {
+        // Unpaired ↫ is kept as-is.
+        assert_eq!(audible_utterance("like\u{21ab} ."), "like\u{21ab} .");
+    }
+
+    #[test]
+    fn test_audible_omitted_words_still_filtered() {
+        assert_eq!(audible_utterance("0you go ."), "go .");
+    }
+
+    #[test]
+    fn test_audible_at_markers_stripped() {
+        assert_eq!(audible_utterance("bingbing@c ."), "bingbing .");
+    }
+
+    #[test]
+    fn test_audible_drops_annotations() {
+        assert_eq!(
+            audible_utterance("I want [= desire] cookie ."),
+            "I want cookie ."
+        );
+    }
+
+    #[test]
+    fn test_audible_drops_timestamps() {
+        let input = "hello \x15123_456\x15 .";
+        assert_eq!(audible_utterance(input), "hello .");
+    }
+
+    #[test]
+    fn test_audible_drops_pauses() {
+        assert_eq!(audible_utterance("hello (1.5) world ."), "hello world .");
+        assert_eq!(audible_utterance("hello (.) world ."), "hello world .");
+    }
+
+    // -----------------------------------------------------------------------
+    // clean_disfluency unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_clean_disfluency_colon_between_alpha() {
+        assert_eq!(clean_disfluency("s:paghetti"), "spaghetti");
+    }
+
+    #[test]
+    fn test_clean_disfluency_colon_not_between_alpha() {
+        // Colon at end (like xxx:) should not be stripped.
+        assert_eq!(clean_disfluency("xxx:"), "xxx:");
+    }
+
+    #[test]
+    fn test_clean_disfluency_caret() {
+        assert_eq!(clean_disfluency("spa^ghetti"), "spaghetti");
+    }
+
+    #[test]
+    fn test_clean_disfluency_not_equal_prefix() {
+        assert_eq!(clean_disfluency("\u{2260}butter"), "butter");
+    }
+
+    #[test]
+    fn test_clean_disfluency_paired_arrow() {
+        assert_eq!(clean_disfluency("like\u{21ab}ike-ike\u{21ab}"), "like");
+    }
+
+    #[test]
+    fn test_clean_disfluency_unpaired_arrow() {
+        assert_eq!(clean_disfluency("like\u{21ab}"), "like\u{21ab}");
+    }
+
+    #[test]
+    fn test_clean_disfluency_no_change() {
+        assert_eq!(clean_disfluency("hello"), "hello");
     }
 }

@@ -20,24 +20,24 @@ with BMES tagging and Viterbi decoding to segment unsegmented text into words.
    print(result)
    # [['that', 'is', 'a', 'd', 'o', 'g'], ['this', 'is', 'not', 'a', 'c', 'a', 't']]
 
-Averaged Perceptron
--------------------
+DAG-HMM Segmenter
+------------------
 
-The :py:class:`~rustling.wordseg.AveragedPerceptronSegmenter` uses a character-level averaged perceptron
-with BMES tagging to segment unsegmented text into words.
+The :py:class:`~rustling.wordseg.DAGHMMSegmenter` is a jieba-style hybrid segmenter that combines
+dictionary-based DAG (directed acyclic graph) segmentation with an HMM fallback for
+out-of-vocabulary spans.
 
 .. code-block:: python
 
-   from rustling.wordseg import AveragedPerceptronSegmenter
+   from rustling.wordseg import DAGHMMSegmenter
 
-   model = AveragedPerceptronSegmenter(n_iter=5)
-   model.fit([
+   model = DAGHMMSegmenter()
+   model.fit_segmented([
        ("this", "is", "a", "sentence"),
        ("that", "is", "not", "a", "sentence"),
    ])
    result = model.predict(["thatisadog", "thisisnotacat"])
    print(result)
-   # [['that', 'is', 'a', 'dog'], ['this', 'is', 'not', 'a', 'cat']]
 
 Longest String Matching
 ------------------------

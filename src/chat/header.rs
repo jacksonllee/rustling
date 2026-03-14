@@ -2,9 +2,9 @@
 
 use crate::chat::utterance::Utterance;
 
+#[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 // ---------------------------------------------------------------------------
@@ -12,113 +12,34 @@ use std::hash::{Hash, Hasher};
 // ---------------------------------------------------------------------------
 
 /// Age in the CHAT format: years;months.days (e.g., "2;10.05").
-#[pyclass(from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(from_py_object))]
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Age {
-    #[pyo3(get)]
     pub years: u32,
-    #[pyo3(get)]
     pub months: Option<u32>,
-    #[pyo3(get)]
     pub days: Option<u32>,
 }
 
-#[pymethods]
-impl Age {
-    fn __str__(&self) -> String {
-        let mut s = format!("{}", self.years);
-        if let Some(m) = self.months {
-            s.push_str(&format!(";{m:02}"));
-            if let Some(d) = self.days {
-                s.push_str(&format!(".{d:02}"));
-            }
-        } else {
-            s.push(';');
-        }
-        s
-    }
-
-    fn __repr__(&self) -> String {
-        format!("Age('{}')", self.__str__())
-    }
-
-    fn __eq__(&self, other: &Age) -> bool {
-        self == other
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Return the age in total months as a float.
-    fn in_months(&self) -> f64 {
-        let mut total = self.years as f64 * 12.0;
-        if let Some(m) = self.months {
-            total += m as f64;
-        }
-        if let Some(d) = self.days {
-            total += d as f64 / 30.0;
-        }
-        total
-    }
-}
-
 /// A single participant from @Participants + @ID fields merged.
-#[pyclass(from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(from_py_object))]
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Participant {
-    #[pyo3(get)]
     pub code: String,
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub role: String,
     // From @ID (pipe-delimited fields):
-    #[pyo3(get)]
     pub language: Option<String>,
-    #[pyo3(get)]
     pub corpus: Option<String>,
-    #[pyo3(get)]
     pub age: Option<Age>,
-    #[pyo3(get)]
     pub sex: Option<String>,
-    #[pyo3(get)]
     pub group: Option<String>,
-    #[pyo3(get)]
     pub ses: Option<String>,
-    #[pyo3(get)]
     pub education: Option<String>,
-    #[pyo3(get)]
     pub custom: Option<String>,
     // From participant-specific headers:
-    #[pyo3(get)]
     pub birth: Option<String>,
-    #[pyo3(get)]
     pub birthplace: Option<String>,
-    #[pyo3(get)]
     pub l1: Option<String>,
-}
-
-#[pymethods]
-impl Participant {
-    fn __repr__(&self) -> String {
-        format!(
-            "Participant(code='{}', name='{}', role='{}')",
-            self.code, self.name, self.role
-        )
-    }
-
-    fn __eq__(&self, other: &Participant) -> bool {
-        self == other
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
-    }
 }
 
 /// Media descriptor from @Media header (internal only; exposed to Python as a dict).
@@ -130,95 +51,95 @@ pub(crate) struct Media {
 }
 
 // ---------------------------------------------------------------------------
+// Date parsing
+// ---------------------------------------------------------------------------
+
+/// Parse a CHAT date string into (year, month, day).
+///
+/// Tries DD-MMM-YYYY first (e.g., "25-JAN-1983"), then ISO YYYY-MM-DD.
+/// Returns `None` if neither format matches.
+pub(crate) fn parse_chat_date(s: &str) -> Option<(i32, u32, u32)> {
+    // Try DD-MMM-YYYY
+    if let Some(result) = parse_dmy(s) {
+        return Some(result);
+    }
+    // Try YYYY-MM-DD (ISO)
+    parse_iso(s)
+}
+
+fn parse_dmy(s: &str) -> Option<(i32, u32, u32)> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let day: u32 = parts[0].parse().ok()?;
+    let month = match parts[1].to_ascii_uppercase().as_str() {
+        "JAN" => 1,
+        "FEB" => 2,
+        "MAR" => 3,
+        "APR" => 4,
+        "MAY" => 5,
+        "JUN" => 6,
+        "JUL" => 7,
+        "AUG" => 8,
+        "SEP" => 9,
+        "OCT" => 10,
+        "NOV" => 11,
+        "DEC" => 12,
+        _ => return None,
+    };
+    let year: i32 = parts[2].parse().ok()?;
+    Some((year, month, day))
+}
+
+fn parse_iso(s: &str) -> Option<(i32, u32, u32)> {
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let year: i32 = parts[0].parse().ok()?;
+    let month: u32 = parts[1].parse().ok()?;
+    let day: u32 = parts[2].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+// ---------------------------------------------------------------------------
 // File-level headers
 // ---------------------------------------------------------------------------
 
 /// All file-level (non-changeable) headers from a CHAT file.
-#[pyclass(from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(from_py_object))]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Headers {
     // Hidden
-    #[pyo3(get)]
     pub pid: Option<String>,
     // Initial
-    #[pyo3(get)]
     pub languages: Vec<String>,
-    #[pyo3(get)]
     pub participants: Vec<Participant>,
-    #[pyo3(get)]
     pub options: Option<String>,
     pub(crate) media_data: Option<Media>,
     // Constant + initial changeable stored at file level
-    #[pyo3(get)]
     pub date: Option<String>,
-    #[pyo3(get)]
     pub location: Option<String>,
-    #[pyo3(get)]
     pub number: Option<String>,
-    #[pyo3(get)]
     pub recording_quality: Option<String>,
-    #[pyo3(get)]
     pub room_layout: Option<String>,
-    #[pyo3(get)]
     pub tape_location: Option<String>,
-    #[pyo3(get)]
     pub time_duration: Option<String>,
-    #[pyo3(get)]
     pub time_start: Option<String>,
-    #[pyo3(get)]
     pub transcriber: Option<String>,
-    #[pyo3(get)]
     pub transcription: Option<String>,
-    #[pyo3(get)]
     pub types: Option<String>,
-    #[pyo3(get)]
     pub videos: Option<String>,
-    #[pyo3(get)]
     pub warning: Option<String>,
-    #[pyo3(get)]
     pub situation: Option<String>,
     // Comments (preserves all @Comment lines in order; None if no @Comment lines)
-    #[pyo3(get)]
     pub comments: Option<Vec<String>>,
     // Catch-all for unrecognized headers
-    #[pyo3(get)]
     pub other: HashMap<String, String>,
-}
-
-#[pymethods]
-impl Headers {
-    #[getter]
-    fn media(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        match &self.media_data {
-            None => Ok(None),
-            Some(m) => {
-                let dict = pyo3::types::PyDict::new(py);
-                dict.set_item("filename", &m.filename)?;
-                dict.set_item("format", &m.format)?;
-                dict.set_item("status", &m.status)?;
-                Ok(Some(dict.into_any().unbind()))
-            }
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Headers(languages={:?}, participants=[...{}], date={:?})",
-            self.languages,
-            self.participants.len(),
-            self.date,
-        )
-    }
-
-    fn __eq__(&self, other: &Headers) -> bool {
-        self == other
-    }
-
-    fn __hash__(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash_into(&mut hasher);
-        hasher.finish()
-    }
 }
 
 impl Headers {
@@ -252,7 +173,7 @@ impl Headers {
 // ---------------------------------------------------------------------------
 
 /// A changeable header that can appear mid-file in CHAT transcripts.
-#[pyclass(eq, hash, from_py_object)]
+#[cfg_attr(feature = "pyo3", pyclass(eq, hash, from_py_object))]
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub enum ChangeableHeader {
     Activities { value: String },
@@ -882,6 +803,7 @@ mod tests {
 
         // Constant
         assert_eq!(headers.date.as_deref(), Some("25-JAN-1983"));
+        assert_eq!(parse_chat_date("25-JAN-1983"), Some((1983, 1, 25)));
         assert_eq!(headers.location.as_deref(), Some("Boston, MA, USA"));
 
         // Media
@@ -938,5 +860,28 @@ mod tests {
             Some("Pittsburgh, PA")
         );
         assert_eq!(headers.participants[0].l1.as_deref(), Some("eng"));
+    }
+
+    #[test]
+    fn test_parse_chat_date_dmy() {
+        assert_eq!(parse_chat_date("25-JAN-1983"), Some((1983, 1, 25)));
+        assert_eq!(parse_chat_date("12-NOV-1962"), Some((1962, 11, 12)));
+        assert_eq!(parse_chat_date("01-feb-2020"), Some((2020, 2, 1)));
+        assert_eq!(parse_chat_date("31-Dec-1999"), Some((1999, 12, 31)));
+    }
+
+    #[test]
+    fn test_parse_chat_date_iso() {
+        assert_eq!(parse_chat_date("1983-01-25"), Some((1983, 1, 25)));
+        assert_eq!(parse_chat_date("2020-12-31"), Some((2020, 12, 31)));
+    }
+
+    #[test]
+    fn test_parse_chat_date_invalid() {
+        assert_eq!(parse_chat_date("not-a-date"), None);
+        assert_eq!(parse_chat_date("25/JAN/1983"), None);
+        assert_eq!(parse_chat_date(""), None);
+        assert_eq!(parse_chat_date("2020-13-01"), None);
+        assert_eq!(parse_chat_date("2020-00-01"), None);
     }
 }
