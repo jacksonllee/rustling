@@ -181,6 +181,7 @@ fn chat_error_to_pyerr(e: ChatError) -> pyo3::PyErr {
         ChatError::Io(e) => pyo3::exceptions::PyIOError::new_err(e.to_string()),
         ChatError::InvalidPattern(e) => pyo3::exceptions::PyValueError::new_err(e),
         ChatError::Zip(e) => pyo3::exceptions::PyIOError::new_err(e),
+        ChatError::Source(e) => e.into(),
     }
 }
 
@@ -319,9 +320,46 @@ pub trait BasePyChat: BaseChat {
         }
     }
 
-    /// Write CHAT data to disk with Python error conversion.
-    fn py_write(&self, path: &str, is_dir: bool, filenames: Option<Vec<String>>) -> PyResult<()> {
-        self.write_files(path, is_dir, filenames)
+    /// Write CHAT (.cha) files to a directory with Python error conversion.
+    fn py_write_chat(&self, dir_path: &str, filenames: Option<Vec<String>>) -> PyResult<()> {
+        self.write_chat_files(dir_path, filenames)
+            .map_err(|e| match e {
+                WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
+                WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
+            })
+    }
+
+    /// Write ELAN (.eaf) files to a directory with Python error conversion.
+    fn py_write_elan(&self, dir_path: &str, filenames: Option<Vec<String>>) -> PyResult<()> {
+        self.write_elan_files(dir_path, filenames)
+            .map_err(|e| match e {
+                WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
+                WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
+            })
+    }
+
+    /// Write SRT (.srt) files to a directory with Python error conversion.
+    fn py_write_srt(
+        &self,
+        dir_path: &str,
+        participants: Option<&[String]>,
+        filenames: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        self.write_srt_files(dir_path, participants, filenames)
+            .map_err(|e| match e {
+                WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
+                WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
+            })
+    }
+
+    /// Write TextGrid (.TextGrid) files to a directory with Python error conversion.
+    fn py_write_textgrid(
+        &self,
+        dir_path: &str,
+        participants: Option<&[String]>,
+        filenames: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        self.write_textgrid_files(dir_path, participants, filenames)
             .map_err(|e| match e {
                 WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
                 WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
@@ -643,6 +681,92 @@ impl PyChat {
             &path,
             r#match,
             extension,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+        )
+        .map_err(chat_error_to_pyerr)?;
+        handle_misalignments(&misalignments, strict, py)?;
+        let validation_errors = validate_chat(&chat);
+        handle_validation_errors(&validation_errors, strict)?;
+        let result = Self { inner: chat };
+        for f in result.inner.files() {
+            f.cached_py_utterances(py);
+            f.cached_py_tokens(py);
+        }
+        Ok(result)
+    }
+
+    /// Load CHAT data from a git repository.
+    #[classmethod]
+    #[pyo3(name = "from_git")]
+    #[pyo3(signature = (url, *, rev=None, depth=None, r#match=None, extension=".cha", cache_dir=None, force_download=false, parallel=true, strict=true, mor_tier=Some("%mor"), gra_tier=Some("%gra")))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_git(
+        _cls: &Bound<'_, PyType>,
+        url: &str,
+        rev: Option<&str>,
+        depth: Option<u32>,
+        r#match: Option<&str>,
+        extension: &str,
+        cache_dir: Option<PathBuf>,
+        force_download: bool,
+        parallel: bool,
+        strict: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
+    ) -> PyResult<Self> {
+        let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
+        let py = _cls.py();
+        let (chat, misalignments) = Chat::from_git(
+            url,
+            rev,
+            depth,
+            r#match,
+            extension,
+            cache_dir,
+            force_download,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+        )
+        .map_err(chat_error_to_pyerr)?;
+        handle_misalignments(&misalignments, strict, py)?;
+        let validation_errors = validate_chat(&chat);
+        handle_validation_errors(&validation_errors, strict)?;
+        let result = Self { inner: chat };
+        for f in result.inner.files() {
+            f.cached_py_utterances(py);
+            f.cached_py_tokens(py);
+        }
+        Ok(result)
+    }
+
+    /// Load CHAT data from a URL.
+    #[classmethod]
+    #[pyo3(name = "from_url")]
+    #[pyo3(signature = (url, *, r#match=None, extension=".cha", cache_dir=None, force_download=false, parallel=true, strict=true, mor_tier=Some("%mor"), gra_tier=Some("%gra")))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_url(
+        _cls: &Bound<'_, PyType>,
+        url: &str,
+        r#match: Option<&str>,
+        extension: &str,
+        cache_dir: Option<PathBuf>,
+        force_download: bool,
+        parallel: bool,
+        strict: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
+    ) -> PyResult<Self> {
+        let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
+        let py = _cls.py();
+        let (chat, misalignments) = Chat::from_url(
+            url,
+            r#match,
+            extension,
+            cache_dir,
+            force_download,
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
@@ -1052,12 +1176,118 @@ impl PyChat {
         self.to_strings()
     }
 
-    /// Write CHAT data to disk.
-    #[pyo3(name = "to_chat")]
-    #[pyo3(signature = (path, *, is_dir=false, filenames=None))]
-    fn write(&self, path: PathBuf, is_dir: bool, filenames: Option<Vec<String>>) -> PyResult<()> {
-        let path = pathbuf_to_string(path)?;
-        self.py_write(&path, is_dir, filenames)
+    /// Write CHAT (.cha) files to a directory.
+    #[pyo3(name = "to_files")]
+    #[pyo3(signature = (dir_path, /, *, filenames=None))]
+    fn write_chat(&self, dir_path: PathBuf, filenames: Option<Vec<String>>) -> PyResult<()> {
+        let dir_path = pathbuf_to_string(dir_path)?;
+        self.py_write_chat(&dir_path, filenames)
+    }
+
+    /// Return EAF XML strings, one per file.
+    #[pyo3(name = "to_elan_strs")]
+    fn py_to_elan_strings(&self) -> Vec<String> {
+        self.to_elan_strings()
+    }
+
+    /// Convert to an ELAN object.
+    #[pyo3(name = "to_elan")]
+    fn py_to_elan(&self) -> crate::elan::PyElan {
+        crate::elan::PyElan {
+            inner: self.to_elan(),
+        }
+    }
+
+    /// Write ELAN (.eaf) files to a directory.
+    #[pyo3(name = "to_elan_files")]
+    #[pyo3(signature = (dir_path, /, *, filenames=None))]
+    fn write_elan(&self, dir_path: PathBuf, filenames: Option<Vec<String>>) -> PyResult<()> {
+        let dir_path = pathbuf_to_string(dir_path)?;
+        self.py_write_elan(&dir_path, filenames)
+    }
+
+    /// Return SRT format strings, one per file.
+    #[pyo3(name = "to_srt_strs")]
+    #[pyo3(signature = (*, participants=None))]
+    fn py_to_srt_strings(&self, participants: Option<Vec<String>>) -> Vec<String> {
+        self.to_srt_strings(participants.as_deref())
+    }
+
+    /// Convert to an SRT object.
+    #[pyo3(name = "to_srt")]
+    #[pyo3(signature = (*, participants=None))]
+    fn py_to_srt(&self, participants: Option<Vec<String>>) -> crate::srt::PySrt {
+        crate::srt::PySrt {
+            inner: self.to_srt(participants.as_deref()),
+        }
+    }
+
+    /// Write SRT (.srt) files to a directory.
+    #[pyo3(name = "to_srt_files")]
+    #[pyo3(signature = (dir_path, /, *, participants=None, filenames=None))]
+    fn write_srt(
+        &self,
+        dir_path: PathBuf,
+        participants: Option<Vec<String>>,
+        filenames: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let dir_path = pathbuf_to_string(dir_path)?;
+        self.py_write_srt(&dir_path, participants.as_deref(), filenames)
+    }
+
+    /// Return TextGrid format strings, one per file.
+    #[pyo3(name = "to_textgrid_strs")]
+    #[pyo3(signature = (*, participants=None))]
+    fn py_to_textgrid_strings(&self, participants: Option<Vec<String>>) -> Vec<String> {
+        self.to_textgrid_strings(participants.as_deref())
+    }
+
+    /// Convert to a TextGrid object.
+    #[pyo3(name = "to_textgrid")]
+    #[pyo3(signature = (*, participants=None))]
+    fn py_to_textgrid(&self, participants: Option<Vec<String>>) -> crate::textgrid::PyTextGrid {
+        crate::textgrid::PyTextGrid {
+            inner: self.to_textgrid(participants.as_deref()),
+        }
+    }
+
+    /// Write TextGrid (.TextGrid) files to a directory.
+    #[pyo3(name = "to_textgrid_files")]
+    #[pyo3(signature = (dir_path, /, *, participants=None, filenames=None))]
+    fn write_textgrid(
+        &self,
+        dir_path: PathBuf,
+        participants: Option<Vec<String>>,
+        filenames: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let dir_path = pathbuf_to_string(dir_path)?;
+        self.py_write_textgrid(&dir_path, participants.as_deref(), filenames)
+    }
+
+    /// Return CoNLL-U format strings, one per file.
+    #[pyo3(name = "to_conllu_strs")]
+    fn py_to_conllu_strings(&self) -> Vec<String> {
+        self.to_conllu_strings()
+    }
+
+    /// Convert to a CoNLL-U object.
+    #[pyo3(name = "to_conllu")]
+    fn py_to_conllu(&self) -> crate::conllu::PyConllu {
+        crate::conllu::PyConllu {
+            inner: self.to_conllu(),
+        }
+    }
+
+    /// Write CoNLL-U (.conllu) files to a directory.
+    #[pyo3(name = "to_conllu_files")]
+    #[pyo3(signature = (dir_path, /, *, filenames=None))]
+    fn write_conllu(&self, dir_path: PathBuf, filenames: Option<Vec<String>>) -> PyResult<()> {
+        let dir_path = pathbuf_to_string(dir_path)?;
+        self.write_conllu_files(&dir_path, filenames)
+            .map_err(|e| match e {
+                WriteError::Validation(msg) => pyo3::exceptions::PyValueError::new_err(msg),
+                WriteError::Io(err) => pyo3::exceptions::PyIOError::new_err(err.to_string()),
+            })
     }
 
     fn __bool__(&self) -> bool {

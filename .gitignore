@@ -77,3 +77,6 @@ benchmarks/.results/
 # This is a library, not an application.
 Cargo.lock
 uv.lock
+
+# From maturin develop
+python/rustling/librustling.dylib.dSYM/

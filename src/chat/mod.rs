@@ -5,6 +5,8 @@
 //! utterances, tokens, and annotations.
 
 mod clean_utterance;
+mod conllu_writer;
+mod elan_writer;
 pub(crate) mod header;
 #[cfg(feature = "pyo3")]
 mod header_py;
@@ -12,6 +14,8 @@ mod ipsyn;
 mod reader;
 #[cfg(feature = "pyo3")]
 mod reader_py;
+mod srt_writer;
+mod textgrid_writer;
 mod utterance;
 #[cfg(feature = "pyo3")]
 mod utterance_py;

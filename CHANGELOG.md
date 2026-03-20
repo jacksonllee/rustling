@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-20
+
+### Added
+
+- Support for data formats:
+   * CoNLL-U for Universal Dependencies
+   * ELAN for annotated multimedia data
+   * TextGrid for Praat annotations
+   * SRT for subtitles
+- CHAT data handling:
+   * Added a convenience function `read_chat.
+   * Added `from_git` and `from_url` methods for remote data sources.
+
 ## [0.7.0] - 2026-03-14
 
 ### Added

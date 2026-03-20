@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Update benchmark performance tables in python/docs/index.rst and README.md.
+"""Update benchmark performance tables in benchmarks/README.md.
 
 Reads exported JSON results from benchmark scripts and patches the
-summary tables in both the Sphinx documentation and the repo root README.
+summary table in the benchmarks README.
 
 Usage:
-    python benchmarks/update_docs.py --from-json benchmarks/.results/
+    python benchmarks/update_readme.py --from-json benchmarks/.results/
 """
 
 from __future__ import annotations
@@ -18,8 +18,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-INDEX_RST_PATH = REPO_ROOT / "python" / "docs" / "index.rst"
-README_MD_PATH = REPO_ROOT / "README.md"
+BENCHMARKS_README_PATH = REPO_ROOT / "benchmarks" / "README.md"
 
 # Maps JSON filenames to their benchmark category
 JSON_FILES = {
@@ -28,6 +27,9 @@ JSON_FILES = {
     "tagger.json": "tagger",
     "hmm.json": "hmm",
     "chat.json": "chat",
+    "elan.json": "elan",
+    "conllu.json": "conllu",
+    "textgrid.json": "textgrid",
 }
 
 
@@ -143,6 +145,63 @@ def extract_speedups(json_dir: Path) -> dict[str, float | dict[str, float]]:
                 )
                 speedups[f"chat:{task}"] = s
 
+    # --- ELAN Parsing ---
+    elan_path = json_dir / "elan.json"
+    if elan_path.exists():
+        with open(elan_path) as f:
+            elan_data = json.load(f)
+
+        elan_tasks = [
+            "parse_single",
+            "parse_all",
+        ]
+        for task in elan_tasks:
+            bench = elan_data["benchmarks"].get(task, {})
+            if bench.get("rustling") and bench.get("pympi-ling"):
+                s = compute_speedup(
+                    bench["rustling"]["time_seconds"],
+                    bench["pympi-ling"]["time_seconds"],
+                )
+                speedups[f"elan:{task}"] = s
+
+    # --- TextGrid Parsing ---
+    textgrid_path = json_dir / "textgrid.json"
+    if textgrid_path.exists():
+        with open(textgrid_path) as f:
+            textgrid_data = json.load(f)
+
+        textgrid_tasks = [
+            "parse_single",
+            "parse_all",
+        ]
+        for task in textgrid_tasks:
+            bench = textgrid_data["benchmarks"].get(task, {})
+            if bench.get("rustling") and bench.get("pympi-ling"):
+                s = compute_speedup(
+                    bench["rustling"]["time_seconds"],
+                    bench["pympi-ling"]["time_seconds"],
+                )
+                speedups[f"textgrid:{task}"] = s
+
+    # --- CoNLL-U Parsing ---
+    conllu_path = json_dir / "conllu.json"
+    if conllu_path.exists():
+        with open(conllu_path) as f:
+            conllu_data = json.load(f)
+
+        conllu_tasks = [
+            "from_strs",
+            "from_files",
+        ]
+        for task in conllu_tasks:
+            bench = conllu_data["benchmarks"].get(task, {})
+            if bench.get("rustling") and bench.get("conllu"):
+                s = compute_speedup(
+                    bench["rustling"]["time_seconds"],
+                    bench["conllu"]["time_seconds"],
+                )
+                speedups[f"conllu:{task}"] = s
+
     return speedups
 
 
@@ -182,30 +241,18 @@ TABLE_ROWS = [
     ("", "Reading from strings", "chat:from_strs", "pylangacq"),
     ("", "Parsing utterances", "chat:utterances", "pylangacq"),
     ("", "Parsing tokens", "chat:tokens", "pylangacq"),
+    ("**ELAN Parsing**", "Parse single file", "elan:parse_single", "pympi-ling"),
+    ("", "Parse all files", "elan:parse_all", "pympi-ling"),
+    (
+        "**TextGrid Parsing**",
+        "Parse single file",
+        "textgrid:parse_single",
+        "pympi-ling",
+    ),
+    ("", "Parse all files", "textgrid:parse_all", "pympi-ling"),
+    ("**CoNLL-U Parsing**", "Parse from strings", "conllu:from_strs", "conllu"),
+    ("", "Parse from files", "conllu:from_files", "conllu"),
 ]
-
-
-def generate_rst_table(speedups: dict[str, float | dict[str, float]]) -> str:
-    """Generate an RST list-table for python/docs/index.rst."""
-    lines = [
-        ".. list-table::",
-        "   :header-rows: 1",
-        "   :widths: 25 25 15 35",
-        "",
-        "   * - Component",
-        "     - Task",
-        "     - Speedup",
-        "     - vs.",
-    ]
-    for component, task, key, vs in TABLE_ROWS:
-        if key not in speedups:
-            continue
-        formatted = format_speedup(speedups[key])
-        lines.append(f"   * - {component}")
-        lines.append(f"     - {task}")
-        lines.append(f"     - **{formatted}**")
-        lines.append(f"     - {vs}")
-    return "\n".join(lines)
 
 
 def generate_md_table(speedups: dict[str, float | dict[str, float]]) -> str:
@@ -222,19 +269,20 @@ def generate_md_table(speedups: dict[str, float | dict[str, float]]) -> str:
     return "\n".join(lines)
 
 
-def update_readme_md(speedups: dict[str, float | dict[str, float]]) -> bool:
-    """Update the performance table in README.md.
+def _update_md_table(
+    path: Path, label: str, speedups: dict[str, float | dict[str, float]]
+) -> bool:
+    """Update a markdown performance table in the given file.
     Returns True if changed.
     """
-    content = README_MD_PATH.read_text()
+    content = path.read_text()
     new_table = generate_md_table(speedups)
 
-    # Replace existing markdown table between ## Performance and See [
     pattern = r"(\n\| Component \|.*?\n(?:\|.*\n)*)"
     match = re.search(pattern, content)
     if not match:
         print(
-            "ERROR: Could not find performance table or marker in README.md",
+            f"ERROR: Could not find performance table in {label}",
             file=sys.stderr,
         )
         return False
@@ -243,44 +291,17 @@ def update_readme_md(speedups: dict[str, float | dict[str, float]]) -> bool:
     )
 
     if new_content == content:
-        print("README.md: no changes needed")
+        print(f"{label}: no changes needed")
         return False
 
-    README_MD_PATH.write_text(new_content)
-    print("README.md: updated performance table")
-    return True
-
-
-def update_index_rst(speedups: dict[str, float | dict[str, float]]) -> bool:
-    """Update the performance table in python/docs/index.rst.
-    Returns True if changed.
-    """
-    content = INDEX_RST_PATH.read_text()
-    new_table = generate_rst_table(speedups)
-
-    # Match the list-table block
-    pattern = r"\.\. list-table::\n(?:[ \t]+[^\n]*\n|\n)*(?:   \* -[^\n]*\n(?:     -[^\n]*\n)*)+"  # noqa: E501
-    match = re.search(pattern, content)
-    if not match:
-        print(
-            "ERROR: Could not find performance table in python/docs/index.rst",
-            file=sys.stderr,
-        )
-        return False
-
-    new_content = content[: match.start()] + new_table + "\n" + content[match.end() :]
-    if new_content == content:
-        print("python/docs/index.rst: no changes needed")
-        return False
-
-    INDEX_RST_PATH.write_text(new_content)
-    print("python/docs/index.rst: updated performance table")
+    path.write_text(new_content)
+    print(f"{label}: updated performance table")
     return True
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Update benchmark tables in README.md and python/docs/index.rst"
+        description="Update benchmark tables in benchmarks/README.md"
     )
     parser.add_argument(
         "--from-json",
@@ -319,8 +340,7 @@ def main() -> None:
         print(f"  {key}: {format_speedup(value)}")
 
     print()
-    update_readme_md(speedups)
-    update_index_rst(speedups)
+    _update_md_table(BENCHMARKS_README_PATH, "benchmarks/README.md", speedups)
 
 
 if __name__ == "__main__":

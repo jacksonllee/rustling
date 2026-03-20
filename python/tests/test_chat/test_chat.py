@@ -1068,69 +1068,196 @@ class TestToStrs:
         assert reader.words() == reader2.words()
 
 
-class TestToChat:
-    def test_to_chat_single_file(self, tmp_path):
+class TestToFiles:
+    def test_to_files_single_file(self, tmp_path):
         reader = CHAT.from_strs([BASIC_CHAT])
-        out = str(tmp_path / "output.cha")
-        reader.to_chat(out)
-        reader2 = CHAT.from_files([out])
+        out_dir = str(tmp_path / "output")
+        reader.to_files(out_dir)
+        reader2 = CHAT.from_dir(out_dir)
         assert reader2.words() == reader.words()
 
-    def test_to_chat_with_path(self, tmp_path):
-        """to_chat accepts pathlib.Path directly."""
+    def test_to_files_with_path(self, tmp_path):
+        """to_files accepts pathlib.Path directly."""
         reader = CHAT.from_strs([BASIC_CHAT])
-        out = tmp_path / "output.cha"
-        reader.to_chat(out)
-        reader2 = CHAT.from_files([out])
+        out_dir = tmp_path / "output"
+        reader.to_files(out_dir)
+        reader2 = CHAT.from_dir(out_dir)
         assert reader2.words() == reader.words()
 
-    def test_to_chat_directory(self, tmp_path):
+    def test_to_files_directory(self, tmp_path):
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         out_dir = str(tmp_path / "output")
-        reader.to_chat(out_dir, is_dir=True)
+        reader.to_files(out_dir)
         reader2 = CHAT.from_dir(out_dir)
         assert reader2.n_files == 2
 
-    def test_to_chat_custom_filenames(self, tmp_path):
+    def test_to_files_custom_filenames(self, tmp_path):
         import os
 
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         out_dir = str(tmp_path / "output")
-        reader.to_chat(out_dir, is_dir=True, filenames=["file1.cha", "file2.cha"])
+        reader.to_files(out_dir, filenames=["file1.cha", "file2.cha"])
         assert os.path.exists(os.path.join(out_dir, "file1.cha"))
         assert os.path.exists(os.path.join(out_dir, "file2.cha"))
 
-    def test_to_chat_default_filenames(self, tmp_path):
+    def test_to_files_default_filenames_from_ids(self, tmp_path):
         import os
 
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         out_dir = str(tmp_path / "output")
-        reader.to_chat(out_dir, is_dir=True)
+        reader.to_files(out_dir)
+        # IDs "a" and "b" are not UUIDs, so filenames are derived from them.
+        assert os.path.exists(os.path.join(out_dir, "a.cha"))
+        assert os.path.exists(os.path.join(out_dir, "b.cha"))
+
+    def test_to_files_default_filenames_numbered(self, tmp_path):
+        import os
+
+        # No ids -> UUIDs are generated -> numbered fallback.
+        reader = CHAT.from_strs(TWO_FILES)
+        out_dir = str(tmp_path / "output")
+        reader.to_files(out_dir)
         assert os.path.exists(os.path.join(out_dir, "0001.cha"))
         assert os.path.exists(os.path.join(out_dir, "0002.cha"))
 
-    def test_to_chat_multiple_files_no_dir_raises(self, tmp_path):
+    def test_to_files_filename_count_mismatch_raises(self, tmp_path):
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         with pytest.raises(ValueError):
-            reader.to_chat(str(tmp_path / "output.cha"))
-
-    def test_to_chat_filename_count_mismatch_raises(self, tmp_path):
-        reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
-        with pytest.raises(ValueError):
-            reader.to_chat(
+            reader.to_files(
                 str(tmp_path / "output"),
-                is_dir=True,
                 filenames=["only_one.cha"],
             )
 
-    def test_to_chat_round_trip_real_files(self, testchat_good_dir, tmp_path):
+    def test_to_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+        import os
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        out_dir = str(tmp_path / "output")
+        reader.to_files(out_dir)
+        # Filenames should be derived from original file paths.
+        for fp in reader.file_paths:
+            expected = os.path.splitext(os.path.basename(fp))[0] + ".cha"
+            assert os.path.exists(os.path.join(out_dir, expected)), expected
+
+    def test_to_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
             out_dir = str(tmp_path / "output")
-            reader.to_chat(out_dir, is_dir=True)
+            reader.to_files(out_dir)
             reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader.words() == reader2.words()
+
+
+class TestToElan:
+    def test_to_elan_returns_elan_object(self):
+        from rustling.elan import ELAN
+
+        reader = CHAT.from_strs([BASIC_CHAT])
+        elan = reader.to_elan()
+        assert isinstance(elan, ELAN)
+        assert elan.n_files == 1
+
+    def test_to_elan_tiers(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        elan = reader.to_elan()
+        tiers_dict = elan.tiers()[0]
+        tier_ids = list(tiers_dict.keys())
+        assert "CHI" in tier_ids
+        assert "MOT" in tier_ids
+        assert "mor@CHI" in tier_ids
+        assert "gra@CHI" in tier_ids
+        assert "mor@MOT" in tier_ids
+        assert "gra@MOT" in tier_ids
+
+    def test_to_elan_strs(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        strs = reader.to_elan_strs()
+        assert len(strs) == 1
+        assert "ANNOTATION_DOCUMENT" in strs[0]
+        assert "TIER_ID" in strs[0]
+
+    def test_to_elan_dep_tier_structure(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        elan = reader.to_elan()
+        tiers_dict = elan.tiers()[0]
+        chi_tier = tiers_dict["CHI"]
+        mor_chi = tiers_dict["mor@CHI"]
+        assert chi_tier.parent_id is None
+        assert mor_chi.parent_id == "CHI"
+        # CHI has 1 utterance in BASIC_CHAT.
+        assert len(chi_tier.annotations) == 1
+        assert chi_tier.annotations[0].value == "I want cookie ."
+        assert len(mor_chi.annotations) == 1
+        assert mor_chi.annotations[0].value == "pro|I v|want n|cookie ."
+
+    def test_to_elan_multiple_files(self):
+        reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
+        elan = reader.to_elan()
+        assert elan.n_files == 2
+
+    def test_to_elan_files_directory(self, tmp_path):
+        from rustling.elan import ELAN
+
+        reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir)
+        elan = ELAN.from_dir(out_dir)
+        assert elan.n_files == 2
+
+    def test_to_elan_files_custom_filenames(self, tmp_path):
+        import os
+
+        reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir, filenames=["a.eaf", "b.eaf"])
+        assert os.path.exists(os.path.join(out_dir, "a.eaf"))
+        assert os.path.exists(os.path.join(out_dir, "b.eaf"))
+
+    def test_to_elan_files_default_filenames_from_ids(self, tmp_path):
+        import os
+
+        reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir)
+        # IDs "a" and "b" are not UUIDs, so filenames derive as a.eaf, b.eaf.
+        assert os.path.exists(os.path.join(out_dir, "a.eaf"))
+        assert os.path.exists(os.path.join(out_dir, "b.eaf"))
+
+    def test_to_elan_files_default_filenames_numbered(self, tmp_path):
+        import os
+
+        reader = CHAT.from_strs(TWO_FILES)
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir)
+        assert os.path.exists(os.path.join(out_dir, "0001.eaf"))
+        assert os.path.exists(os.path.join(out_dir, "0002.eaf"))
+
+    def test_to_elan_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+        import os
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir)
+        # Filenames should be derived from original .cha paths with .eaf extension.
+        for fp in reader.file_paths:
+            expected = os.path.splitext(os.path.basename(fp))[0] + ".eaf"
+            assert os.path.exists(os.path.join(out_dir, expected)), expected
+
+    def test_to_elan_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
+        from rustling.elan import ELAN
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        out_dir = str(tmp_path / "output")
+        reader.to_elan_files(out_dir)
+        elan = ELAN.from_dir(out_dir)
+        assert elan.n_files == reader.n_files
 
 
 class TestPopAndStitch:

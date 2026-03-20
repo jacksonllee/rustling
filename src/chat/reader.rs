@@ -158,6 +158,8 @@ pub enum ChatError {
     InvalidPattern(String),
     /// An error occurred reading a ZIP archive.
     Zip(String),
+    /// A remote source error occurred (git clone, HTTP download, etc.).
+    Source(crate::sources::SourceError),
 }
 
 impl std::fmt::Display for ChatError {
@@ -166,6 +168,7 @@ impl std::fmt::Display for ChatError {
             ChatError::Io(e) => write!(f, "{e}"),
             ChatError::InvalidPattern(e) => write!(f, "Invalid match regex: {e}"),
             ChatError::Zip(e) => write!(f, "{e}"),
+            ChatError::Source(e) => write!(f, "{e}"),
         }
     }
 }
@@ -174,8 +177,15 @@ impl std::error::Error for ChatError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ChatError::Io(e) => Some(e),
+            ChatError::Source(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+impl From<crate::sources::SourceError> for ChatError {
+    fn from(e: crate::sources::SourceError) -> Self {
+        ChatError::Source(e)
     }
 }
 
@@ -885,61 +895,325 @@ pub trait BaseChat: Sized {
     // Serialization
     // -----------------------------------------------------------------------
 
+    /// Derive default output filenames from existing file paths.
+    ///
+    /// If all files have real (non-UUID) filenames, use those with the
+    /// extension replaced by `target_ext` (e.g., `".cha"` or `".eaf"`).
+    /// Otherwise fall back to numbered names (`0001.cha`, etc.).
+    fn default_output_filenames(&self, target_ext: &str) -> Vec<String> {
+        let derived: Vec<Option<String>> = self
+            .files()
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(&f.file_path);
+                let stem = path.file_stem()?.to_str()?;
+                // If the stem is a UUID, treat as in-memory / unnamed.
+                if uuid::Uuid::try_parse(stem).is_ok() {
+                    return None;
+                }
+                Some(format!("{stem}{target_ext}"))
+            })
+            .collect();
+
+        // Use derived names only if ALL files have them and there are no duplicates.
+        if derived.iter().all(|d| d.is_some()) {
+            let names: Vec<String> = derived.into_iter().map(|d| d.unwrap()).collect();
+            let unique: HashSet<&String> = names.iter().collect();
+            if unique.len() == names.len() {
+                return names;
+            }
+        }
+
+        // Fallback: numbered.
+        (0..self.files().len())
+            .map(|i| format!("{:04}{target_ext}", i + 1))
+            .collect()
+    }
+
     /// Return CHAT data strings, one per file.
     fn to_strings(&self) -> Vec<String> {
         self.files().iter().map(serialize_chat_file).collect()
     }
 
-    /// Write CHAT data to disk.
-    fn write_files(
+    /// Return EAF XML strings (one per file) for ELAN export.
+    fn to_elan_strings(&self) -> Vec<String> {
+        self.files()
+            .iter()
+            .map(super::elan_writer::chat_file_to_eaf_xml)
+            .collect()
+    }
+
+    /// Convert to an [`Elan`] object.
+    fn to_elan(&self) -> crate::elan::Elan {
+        let strs = self.to_elan_strings();
+        let ids: Vec<String> = self
+            .files()
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(&f.file_path);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if uuid::Uuid::try_parse(stem).is_ok() {
+                    f.file_path.clone()
+                } else {
+                    format!("{stem}.eaf")
+                }
+            })
+            .collect();
+        // The generated XML is always valid, so unwrap is safe.
+        crate::elan::Elan::from_strs(strs, Some(ids), false).unwrap()
+    }
+
+    /// Write ELAN (.eaf) files to a directory.
+    fn write_elan_files(
         &self,
-        path: &str,
-        is_dir: bool,
+        dir_path: &str,
+        filenames: Option<Vec<String>>,
+    ) -> Result<(), WriteError> {
+        let strs = self.to_elan_strings();
+        let dir = std::path::Path::new(dir_path);
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+
+        let names: Vec<String> = match filenames {
+            Some(names) => {
+                if names.len() != self.files().len() {
+                    return Err(WriteError::Validation(format!(
+                        "There are {} ELAN files to create, \
+                         but {} filenames were provided.",
+                        self.files().len(),
+                        names.len()
+                    )));
+                }
+                names
+            }
+            None => self.default_output_filenames(".eaf"),
+        };
+
+        for (name, content) in names.iter().zip(strs.iter()) {
+            let file_path = dir.join(name);
+            std::fs::write(&file_path, content).map_err(WriteError::Io)?;
+        }
+        Ok(())
+    }
+
+    /// Write CHAT (.cha) files to a directory.
+    fn write_chat_files(
+        &self,
+        dir_path: &str,
         filenames: Option<Vec<String>>,
     ) -> Result<(), WriteError> {
         let strs = self.to_strings();
+        let dir = std::path::Path::new(dir_path);
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
 
-        if !is_dir {
-            if self.files().len() > 1 {
-                return Err(WriteError::Validation(
-                    "The CHAT data in this reader exists in more than one file. \
-                     Set is_dir=True and pass a directory path."
-                        .into(),
-                ));
-            }
-            if let Some(content) = strs.first() {
-                if let Some(parent) = std::path::Path::new(path).parent()
-                    && !parent.as_os_str().is_empty()
-                {
-                    std::fs::create_dir_all(parent).map_err(WriteError::Io)?;
+        let names: Vec<String> = match filenames {
+            Some(names) => {
+                if names.len() != self.files().len() {
+                    return Err(WriteError::Validation(format!(
+                        "There are {} CHAT files to create, \
+                         but {} filenames were provided.",
+                        self.files().len(),
+                        names.len()
+                    )));
                 }
-                std::fs::write(path, content).map_err(WriteError::Io)?;
+                names
             }
-        } else {
-            let dir = std::path::Path::new(path);
-            std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+            None => self.default_output_filenames(".cha"),
+        };
 
-            let names: Vec<String> = match filenames {
-                Some(names) => {
-                    if names.len() != self.files().len() {
-                        return Err(WriteError::Validation(format!(
-                            "There are {} CHAT files to create, \
-                             but {} filenames were provided.",
-                            self.files().len(),
-                            names.len()
-                        )));
-                    }
-                    names
+        for (name, content) in names.iter().zip(strs.iter()) {
+            let file_path = dir.join(name);
+            std::fs::write(&file_path, content).map_err(WriteError::Io)?;
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // SRT conversion
+    // -----------------------------------------------------------------------
+
+    /// Return SRT format strings (one per file) for SRT export.
+    fn to_srt_strings(&self, participants: Option<&[String]>) -> Vec<String> {
+        self.files()
+            .iter()
+            .map(|f| super::srt_writer::chat_file_to_srt_str(f, participants))
+            .collect()
+    }
+
+    /// Convert to an [`Srt`](crate::srt::Srt) object.
+    fn to_srt(&self, participants: Option<&[String]>) -> crate::srt::Srt {
+        let strs = self.to_srt_strings(participants);
+        let ids: Vec<String> = self
+            .files()
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(&f.file_path);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if uuid::Uuid::try_parse(stem).is_ok() {
+                    f.file_path.clone()
+                } else {
+                    format!("{stem}.srt")
                 }
-                None => (0..self.files().len())
-                    .map(|i| format!("{:04}.cha", i + 1))
-                    .collect(),
-            };
+            })
+            .collect();
+        crate::srt::Srt::from_strs(strs, Some(ids), false).unwrap()
+    }
 
-            for (name, content) in names.iter().zip(strs.iter()) {
-                let file_path = dir.join(name);
-                std::fs::write(&file_path, content).map_err(WriteError::Io)?;
+    /// Write SRT (.srt) files to a directory.
+    fn write_srt_files(
+        &self,
+        dir_path: &str,
+        participants: Option<&[String]>,
+        filenames: Option<Vec<String>>,
+    ) -> Result<(), WriteError> {
+        let strs = self.to_srt_strings(participants);
+        let dir = std::path::Path::new(dir_path);
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+
+        let names: Vec<String> = match filenames {
+            Some(names) => {
+                if names.len() != self.files().len() {
+                    return Err(WriteError::Validation(format!(
+                        "There are {} SRT files to create, \
+                         but {} filenames were provided.",
+                        self.files().len(),
+                        names.len()
+                    )));
+                }
+                names
             }
+            None => self.default_output_filenames(".srt"),
+        };
+
+        for (name, content) in names.iter().zip(strs.iter()) {
+            let file_path = dir.join(name);
+            std::fs::write(&file_path, content).map_err(WriteError::Io)?;
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // CoNLL-U conversion
+    // -----------------------------------------------------------------------
+
+    /// Return CoNLL-U format strings (one per file) for CoNLL-U export.
+    fn to_conllu_strings(&self) -> Vec<String> {
+        self.files()
+            .iter()
+            .map(super::conllu_writer::chat_file_to_conllu_str)
+            .collect()
+    }
+
+    /// Convert to a [`Conllu`](crate::conllu::Conllu) object.
+    fn to_conllu(&self) -> crate::conllu::Conllu {
+        let strs = self.to_conllu_strings();
+        let ids: Vec<String> = self
+            .files()
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(&f.file_path);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if uuid::Uuid::try_parse(stem).is_ok() {
+                    f.file_path.clone()
+                } else {
+                    format!("{stem}.conllu")
+                }
+            })
+            .collect();
+        crate::conllu::Conllu::from_strs(strs, Some(ids), false).unwrap()
+    }
+
+    /// Write CoNLL-U (.conllu) files to a directory.
+    fn write_conllu_files(
+        &self,
+        dir_path: &str,
+        filenames: Option<Vec<String>>,
+    ) -> Result<(), WriteError> {
+        let strs = self.to_conllu_strings();
+        let dir = std::path::Path::new(dir_path);
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+
+        let names: Vec<String> = match filenames {
+            Some(names) => {
+                if names.len() != self.files().len() {
+                    return Err(WriteError::Validation(format!(
+                        "There are {} CoNLL-U files to create, \
+                         but {} filenames were provided.",
+                        self.files().len(),
+                        names.len()
+                    )));
+                }
+                names
+            }
+            None => self.default_output_filenames(".conllu"),
+        };
+
+        for (name, content) in names.iter().zip(strs.iter()) {
+            let file_path = dir.join(name);
+            std::fs::write(&file_path, content).map_err(WriteError::Io)?;
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // TextGrid conversion
+    // -----------------------------------------------------------------------
+
+    /// Return TextGrid format strings (one per file) for TextGrid export.
+    fn to_textgrid_strings(&self, participants: Option<&[String]>) -> Vec<String> {
+        self.files()
+            .iter()
+            .map(|f| super::textgrid_writer::chat_file_to_textgrid_str(f, participants))
+            .collect()
+    }
+
+    /// Convert to a [`TextGrid`](crate::textgrid::TextGrid) object.
+    fn to_textgrid(&self, participants: Option<&[String]>) -> crate::textgrid::TextGrid {
+        let strs = self.to_textgrid_strings(participants);
+        let ids: Vec<String> = self
+            .files()
+            .iter()
+            .map(|f| {
+                let path = std::path::Path::new(&f.file_path);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if uuid::Uuid::try_parse(stem).is_ok() {
+                    f.file_path.clone()
+                } else {
+                    format!("{stem}.TextGrid")
+                }
+            })
+            .collect();
+        crate::textgrid::TextGrid::from_strs(strs, Some(ids), false).unwrap()
+    }
+
+    /// Write TextGrid (.TextGrid) files to a directory.
+    fn write_textgrid_files(
+        &self,
+        dir_path: &str,
+        participants: Option<&[String]>,
+        filenames: Option<Vec<String>>,
+    ) -> Result<(), WriteError> {
+        let strs = self.to_textgrid_strings(participants);
+        let dir = std::path::Path::new(dir_path);
+        std::fs::create_dir_all(dir).map_err(WriteError::Io)?;
+
+        let names: Vec<String> = match filenames {
+            Some(names) => {
+                if names.len() != self.files().len() {
+                    return Err(WriteError::Validation(format!(
+                        "There are {} TextGrid files to create, \
+                         but {} filenames were provided.",
+                        self.files().len(),
+                        names.len()
+                    )));
+                }
+                names
+            }
+            None => self.default_output_filenames(".TextGrid"),
+        };
+
+        for (name, content) in names.iter().zip(strs.iter()) {
+            let file_path = dir.join(name);
+            std::fs::write(&file_path, content).map_err(WriteError::Io)?;
         }
         Ok(())
     }
@@ -1366,6 +1640,73 @@ impl Chat {
 
         let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier);
         Ok((Self::from_chat_files(files), misalignments))
+    }
+
+    /// Load CHAT data from a git repository.
+    ///
+    /// Clones the repository (or uses a cached clone) and parses all
+    /// matching files from the resulting directory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_git(
+        url: &str,
+        rev: Option<&str>,
+        depth: Option<u32>,
+        match_pattern: Option<&str>,
+        extension: &str,
+        cache_dir: Option<std::path::PathBuf>,
+        force_download: bool,
+        parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
+    ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
+        let local_path = crate::sources::resolve_git(url, rev, depth, cache_dir, force_download)?;
+        let path = local_path.to_string_lossy();
+        Self::read_dir(
+            &path,
+            match_pattern,
+            extension,
+            parallel,
+            mor_tier,
+            gra_tier,
+        )
+    }
+
+    /// Load CHAT data from a URL.
+    ///
+    /// Downloads the file (or uses a cached copy) and parses it.
+    /// ZIP files are automatically detected by URL suffix or magic bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_url(
+        url: &str,
+        match_pattern: Option<&str>,
+        extension: &str,
+        cache_dir: Option<std::path::PathBuf>,
+        force_download: bool,
+        parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
+    ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
+        let (local_path, is_zip) = crate::sources::resolve_url(url, cache_dir, force_download)?;
+        let path = local_path.to_string_lossy();
+        if is_zip {
+            Self::read_zip(
+                &path,
+                match_pattern,
+                extension,
+                parallel,
+                mor_tier,
+                gra_tier,
+            )
+        } else {
+            let content = std::fs::read_to_string(local_path)?;
+            Ok(Self::from_strs(
+                vec![content],
+                None,
+                parallel,
+                mor_tier,
+                gra_tier,
+            ))
+        }
     }
 }
 

@@ -962,11 +962,7 @@ fn extract_words(text: &str) -> Vec<&str> {
             }
             if i <= len {
                 let inner = &text[start + 1..i.saturating_sub(1)];
-                for w in inner.split_whitespace() {
-                    if w != "[" && !w.starts_with('[') {
-                        words.push(w);
-                    }
-                }
+                words.extend(extract_words(inner));
             }
             continue;
         }
@@ -1087,5 +1083,39 @@ fn validate_replacements(file_path: &str, text: &str, errors: &mut Vec<Validatio
         errors.push(ValidationError::new(format!(
             "{file_path}: replacement not allowed for a fragment"
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_words_basic() {
+        assert_eq!(extract_words("hello world ."), vec!["hello", "world", "."]);
+    }
+
+    #[test]
+    fn test_extract_words_skips_brackets() {
+        assert_eq!(
+            extract_words("aam [: m_d@s] [*] player@s ."),
+            vec!["aam", "player@s", "."]
+        );
+    }
+
+    #[test]
+    fn test_extract_words_angle_group() {
+        assert_eq!(
+            extract_words("<word1 word2> [/] word3 ."),
+            vec!["word1", "word2", "word3", "."]
+        );
+    }
+
+    #[test]
+    fn test_extract_words_angle_group_with_brackets() {
+        assert_eq!(
+            extract_words("<aam [: m_d@s] [*]> [/] aam [: m_d@s] [*] player@s ."),
+            vec!["aam", "aam", "player@s", "."]
+        );
     }
 }

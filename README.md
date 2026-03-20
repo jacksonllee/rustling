@@ -6,41 +6,37 @@
 <br>
 
 [![PyPI](https://img.shields.io/pypi/v/rustling.svg)](https://pypi.org/project/rustling/)
-[![crates.io](https://img.shields.io/crates/v/rustling.svg)](https://crates.io/crates/rustling)
 [![Conda Version](https://img.shields.io/conda/vn/conda-forge/rustling.svg)](https://anaconda.org/conda-forge/rustling)
+[![crates.io](https://img.shields.io/crates/v/rustling.svg)](https://crates.io/crates/rustling)
 
 Rustling is a blazingly fast library for computational linguistics.
+It aims to provide flexible and efficient tools to facilitate further research.
 
 Documentation: [Python](https://docs.rustling.io/) | [Rust](https://docs.rs/rustling)
 
-## Features
+Currently implemented features:
 
-- N-grams
-- Language models
-- Hidden Markov model
-- Word segmentation
-- Part-of-speech tagging
-- CHAT parsing for TalkBank and CHILDES data
+* Sequence modeling:
+
+   - N-grams and related language models
+   - Hidden Markov model
+   - Word segmentation
+   - Averaged perceptron part-of-speech tagging
+
+* Handling richly formatted data,
+  supporting cross-format conversion as well as both local and remote sources for data ingestion:
+
+   - CHAT for TalkBank and CHILDES
+   - ELAN for annotated multimedia data
+   - TextGrid for Praat annotations
+   - CoNLL-U for University Dependencies
+   - SRT for SubRip subtitles
 
 ## Performance
 
-| Component | Task | Speedup | vs. |
-|---|---|---|---|
-| **Language Models** | Fit | **11x** | NLTK |
-|  | Score | **2x** | NLTK |
-|  | Generate | **86--107x** | NLTK |
-| **Word Segmentation** | LongestStringMatching | **9x** | wordseg |
-| **POS Tagging** | Training | **5x** | NLTK |
-|  | Tagging | **17x** | NLTK |
-| **HMM** | Fit | **14x** | hmmlearn |
-|  | Predict | **0.9x** | hmmlearn |
-|  | Score | **5x** | hmmlearn |
-| **CHAT Parsing** | Reading from a ZIP archive | **30x** | pylangacq |
-|  | Reading from strings | **35x** | pylangacq |
-|  | Parsing utterances | **15x** | pylangacq |
-|  | Parsing tokens | **8x** | pylangacq |
-
-See [`benchmarks/`](https://github.com/jacksonllee/rustling/tree/main/benchmarks) for reproduction scripts.
+Rustling is highly performant because it is implemented in Rust under the hood.
+For benchmarks comparing Rustling against other Python packages with similar functionalities,
+please see [`benchmarks`](https://github.com/jacksonllee/rustling/tree/main/benchmarks).
 
 
 ## Installation

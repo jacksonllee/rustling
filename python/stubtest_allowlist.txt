@@ -16,7 +16,9 @@ rustling.chat.Age
 rustling.chat.CHAT
 rustling.chat.CHAT.from_dir
 rustling.chat.CHAT.from_files
+rustling.chat.CHAT.from_git
 rustling.chat.CHAT.from_strs
+rustling.chat.CHAT.from_url
 rustling.chat.CHAT.from_zip
 rustling.chat.CHAT.ipsyn
 rustling.chat.CHAT.mlu
@@ -65,6 +67,35 @@ rustling.chat.Utterance
 rustling.chat.Utterance.__init__
 rustling.chat.Utterance.__new__
 rustling.chat.Utterances
+rustling.chat._read_chat.CHAT
+rustling.chat._read_chat.Sequence
+
+# conllu module
+rustling.conllu.CoNLLU
+rustling.conllu.Sentence
+rustling.conllu.Token
+rustling.conllu._read_conllu.CoNLLU
+
+# elan module
+rustling.elan.Annotation
+rustling.elan.ELAN
+rustling.elan.Tier
+rustling.elan._read_elan.ELAN
+
+# srt module
+rustling.srt.SRT
+rustling.srt.Utterance
+rustling.srt.Utterance.__init__
+rustling.srt.Utterance.__new__
+rustling.srt._read_srt.SRT
+
+# textgrid module
+rustling.textgrid.Interval
+rustling.textgrid.IntervalTier
+rustling.textgrid.Point
+rustling.textgrid.TextGrid
+rustling.textgrid.TextTier
+rustling.textgrid._read_textgrid.TextGrid
 
 # hmm module
 rustling.hmm.HiddenMarkovModel

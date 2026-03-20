@@ -1,0 +1,479 @@
+.. _chat_read:
+
+Reading CHAT Data
+=================
+
+The ``rustling.chat`` module handles conversational data represented in the CHAT format
+as used in the TalkBank / CHILDES database for language acquisition research.
+CHAT is documented in its `official manual <https://talkbank.org/0info/manuals/CHAT.pdf>`_.
+This page describes the ways CHAT data can be read by the ``rustling.chat`` module.
+
+
+Initializing a CHAT Data Object
+-------------------------------
+
+:func:`~rustling.read_chat`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Reading CHAT data is all about creating a :class:`~rustling.chat.CHAT` object.
+The most convenient way to do it is to use the :func:`~rustling.read_chat` function,
+which asks for a data source and several optional arguments.
+As an example, let's use the `Brown <https://childes.talkbank.org/access/Eng-NA/Brown.html>`_
+dataset of American English on CHILDES.
+On this webpage, after you've logged in (account setup is free),
+you should be able to download the full transcripts of CHAT data as a ZIP archive to your local drive.
+
+.. code-block:: python
+
+    import rustling
+    brown = rustling.read_chat("path/to/your/local/Brown.zip")
+
+:func:`~rustling.read_chat` automatically handles everything behind the scenes for you,
+from unzipping the ZIP archive, traversing through the CHAT files found,
+as well as parsing the files.
+
+.. code-block:: python
+
+    brown.info()
+    # 214 files
+    # 184635 utterances
+    # 841281 words
+    #     Utterance Count  Word Count  File Path
+    # --  ---------------  ----------  ---------------------
+    # #1             1737        6328  Brown/Adam/020304.cha
+    # #2             1972        7587  Brown/Adam/020318.cha
+    # #3             1305        5431  Brown/Adam/020403.cha
+    # #4             1224        4438  Brown/Adam/020415.cha
+    # #5             1344        5375  Brown/Adam/020430.cha
+    # ...
+    # (set `verbose` to True for all the files)
+
+For a quick preview of what the data looks like,
+The :meth:`~rustling.chat.CHAT.head` and :meth:`~rustling.chat.CHAT.tail` methods
+provide a quick preview of what the data looks like:
+
+.. code-block:: python
+
+    brown.head()
+    # *CHI:   play                 checkers               .
+    # %mor:   verb|play-Fin-Imp-S  noun|checker-Plur-Acc  .
+    # %gra:   1|2|ROOT             2|1|OBJ                3|1|PUNCT
+    # %xpho:  <1> pe
+
+    # *CHI:  big         drum       .
+    # %mor:  adj|big-S1  noun|drum  .
+    # %gra:  1|2|AMOD    2|2|ROOT   3|2|PUNCT
+
+    # *MOT:  big         drum       ?
+    # %mor:  adj|big-S1  noun|drum  ?
+    # %gra:  1|2|AMOD    2|2|ROOT   3|2|PUNCT
+
+    # *CHI:  big         drum       .
+    # %mor:  adj|big-S1  noun|drum  .
+    # %gra:  1|2|AMOD    2|2|ROOT   3|2|PUNCT
+    # %spa:  $IMIT
+
+    # *CHI:  big         drum       .
+    # %mor:  adj|big-S1  noun|drum  .
+    # %gra:  1|2|AMOD    2|2|ROOT   3|2|PUNCT
+    # %spa:  $IMIT
+
+In practice, you likely only need a subset of the data at a time, e.g.,
+focusing on a particular child. The Brown dataset contains data for the three children
+Adam, Eve, and Sarah. Suppose you need Eve's data only.
+:func:`~rustling.read_chat` takes the optional argument ``filter_files`` which, if specified,
+filters the data down to the matching file paths.
+To know what the file paths look like and therefore determine what the ``filter_files``
+argument should be,
+the ``brown`` CHAT reader we've just created
+can tell you that via :meth:`~rustling.chat.CHAT.file_paths`:
+
+.. code-block:: python
+
+    brown.file_paths
+    # ['Brown/Adam/020304.cha',
+    #  'Brown/Adam/020318.cha',
+    #  ...
+    #  'Brown/Eve/010600a.cha',
+    #  'Brown/Eve/010600b.cha',
+    #  ...
+    #  'Brown/Sarah/020305.cha',
+    #  'Brown/Sarah/020307.cha',
+    #  ...
+    #  'Brown/Sarah/050106.cha']
+
+It looks like all and only Eve's data is inside the subdirectory called ``"Eve"``.
+If we pass ``"Eve"`` to ``filter_files``, we should be getting only Eve's data this time:
+
+.. code-block:: python
+
+    eve = rustling.read_chat("path/to/your/local/Brown.zip", filter_files="Eve")
+    eve.n_files
+    # 20
+    len(eve.utterances())
+    # 26969
+
+So far, we've seen how :func:`~rustling.read_chat` works with a local ZIP file.
+Other data sources that this function is designed for are:
+
+1. A directory (i.e., folder) on your local system,
+   where CHAT data files are found immediately or recursively in subdirectories:
+
+.. code-block:: python
+
+    chat_data = rustling.read_chat("path/to/your/local/directory/")
+
+2. A single CHAT file on your system:
+
+.. code-block:: python
+
+    chat_data = rustling.read_chat("path/to/your/local/data.cha")
+
+3. A git repository URL (ending in ``.git``):
+
+.. code-block:: python
+
+    chat_data = rustling.read_chat("https://github.com/user/corpus.git")
+
+4. An HTTP/HTTPS URL (ZIP files are automatically detected and extracted):
+
+.. code-block:: python
+
+    chat_data = rustling.read_chat("https://example.com/corpus.zip")
+
+
+:func:`~rustling.read_chat` is designed to cover the common use cases of reading in CHAT data.
+Under the hood, it is a wrapper of several classmethods of :class:`~rustling.chat.CHAT`,
+some of which aren't available from :func:`~rustling.read_chat`.
+These classmethods are introduced in the following,
+where :class:`~rustling.chat.CHAT` is assumed to have been imported:
+
+.. code-block:: python
+
+    from rustling.chat import CHAT
+
+
+From a ZIP File or Local Directory
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Perhaps you don't want :func:`~rustling.read_chat` to do the guess work of
+what type of your data source is, or you want more fine-grained control
+of what counts as CHAT data files or not in your data source.
+While :func:`~rustling.read_chat` already handles a ZIP archive file and
+a local directory, the :class:`~rustling.chat.CHAT` classmethods
+:meth:`~rustling.chat.CHAT.from_zip` and :meth:`~rustling.chat.CHAT.from_dir`
+allow more optional arguments for customization.
+Here's sample code for using these classmethods in the base case:
+
+.. code-block:: python
+
+    chat_data = CHAT.from_zip("path/to/your/local/data.zip")
+    chat_data = CHAT.from_dir("path/to/your/local/directory/")
+
+
+From Local CHAT Data Files
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you'd like to target specific CHAT files,
+:meth:`~rustling.chat.CHAT.from_files` takes a list of file paths:
+
+.. code-block:: python
+
+    path1 = "path/to/one/data/file.cha"
+    path2 = "path/to/another/data/file.cha"
+    chat_data = CHAT.from_files([path1, path2])
+
+
+From In-Memory Strings
+^^^^^^^^^^^^^^^^^^^^^^
+
+If your CHAT data comes from in-memory strings,
+:meth:`~rustling.chat.CHAT.from_strs` takes a list of strings,
+where each string is assumed to conform to the
+`CHAT data format <https://talkbank.org/0info/manuals/CHAT.pdf>`_:
+
+.. code-block:: python
+
+    # Let's create some minimal CHAT data as a string.
+    data = "*CHI:\tI want cookie .\n*MOT:\tokay ."
+
+    # We should see two utterances.
+    print(data)
+    # *CHI:       I want cookie .
+    # *MOT:       okay .
+
+    chat_data = CHAT.from_strs([data])
+    len(chat_data.utterances())
+    # 2
+
+    # All "file" terminology still applies.
+    # Each CHAT data string you pass in is treated as one "file".
+    chat_data.n_files
+    # 1
+
+    chat_data.utterances()
+    # [Utterance(participant='CHI', tokens=[...4 tokens], time_marks=None),
+    #  Utterance(participant='MOT', tokens=[...2 tokens], time_marks=None)]
+
+We are getting ahead of ourselves by showing the result
+of :meth:`~rustling.chat.CHAT.utterances`.
+We are going to drill down to this and many other functions
+in the upcoming parts of the documentation,
+but this quick example gives you a glimpse of how ``rustling.chat`` represents CHAT data.
+
+
+From a Git Repository
+^^^^^^^^^^^^^^^^^^^^^
+
+:meth:`~rustling.chat.CHAT.from_git` clones a git repository
+(or uses a cached clone) and parses all matching CHAT files:
+
+.. code-block:: python
+
+    chat_data = CHAT.from_git("https://github.com/user/corpus.git")
+
+
+From a URL
+^^^^^^^^^^
+
+:meth:`~rustling.chat.CHAT.from_url` downloads a file from a URL
+(or uses a cached copy) and parses it.
+ZIP files are automatically detected and extracted:
+
+.. code-block:: python
+
+    chat_data = CHAT.from_url("https://example.com/corpus.zip")
+
+
+From ``Utterance`` Objects
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you already have a list of :class:`~rustling.chat.Utterance` objects,
+:meth:`~rustling.chat.CHAT.from_utterances` lets you construct a new
+:class:`~rustling.chat.CHAT` reader directly from them:
+
+.. code-block:: python
+
+    utts = eve.utterances()[:5]
+    chat_data = CHAT.from_utterances(utts)
+    chat_data.words()
+    # ['more', 'cookie', '.', 'you', 'more', 'cookies', '?', ...]
+
+For more details and examples, see :ref:`chat_from_utterances`.
+
+
+Custom Tiers for Morphology and Grammatical Relations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+By default, ``rustling.chat`` parses the ``%mor`` (morphology) and ``%gra`` (grammatical relation)
+dependent tiers in CHAT data. Some datasets, however, use non-standard tier names
+for morphological and grammatical annotations — for example, ``%xmor`` and ``%xgra``.
+The ``mor_tier`` and ``gra_tier`` keyword arguments let you tell ``rustling.chat``
+which tiers to treat as morphology and grammar tiers during parsing.
+
+These arguments are available on
+:meth:`~rustling.chat.CHAT.from_strs`,
+:meth:`~rustling.chat.CHAT.from_files`,
+:meth:`~rustling.chat.CHAT.from_dir`, and
+:meth:`~rustling.chat.CHAT.from_zip`.
+
+To specify custom tier names, pass them as strings.
+For instance, to treat ``%xmor`` as the morphology tier:
+
+.. code-block:: python
+
+    chat_data = CHAT.from_zip(
+        "path/to/data.zip",
+        mor_tier="%xmor",
+    )
+
+If your data has either morphology or grammatical relation tiers, but you'd like to skip parsing
+them entirely (to only handle the main tier with transcriptions, to avoid parsing issues, etc.),
+pass ``None`` for either argument
+(note that setting either one to ``None`` disables both tiers):
+
+.. code-block:: python
+
+    # Skip morphology and grammar tier parsing
+    chat_data = CHAT.from_zip(
+        "path/to/data.zip",
+        mor_tier=None,
+        gra_tier=None,
+    )
+
+
+Parallel Processing
+^^^^^^^^^^^^^^^^^^^
+
+Because a CHILDES / TalkBank dataset usually comes with multiple CHAT data files,
+it is reasonable to parallelize the process of reading and parsing CHAT data for speed-up.
+By default, such parallelization is applied.
+If you would like to turn off parallel processing
+(e.g., because your application is already parallelized, and further parallelization
+from within ``rustling.chat`` would create undesirable effects),
+the boolean argument ``parallel`` is available at
+:meth:`~rustling.chat.CHAT.from_zip`,
+:meth:`~rustling.chat.CHAT.from_dir`,
+:meth:`~rustling.chat.CHAT.from_files`, and
+:meth:`~rustling.chat.CHAT.from_strs`,
+and you may set it to ``False`` .
+
+
+Creating an Empty CHAT Object
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Calling :class:`~rustling.chat.CHAT` itself with no arguments initializes an empty reader:
+
+.. code-block:: python
+
+    chat_data = CHAT()
+    chat_data.n_files
+    # 0
+
+An empty data object is useful when you'd like to start with no data
+and "grow" it by having data added as necessary.
+The section below discusses how to manipulate a :class:`~rustling.chat.CHAT` object.
+
+
+Adding and Removing Data
+------------------------
+
+A :class:`~rustling.chat.CHAT` keeps the linear ordering of CHAT data
+by the ordering of the source data files.
+CHAT data typically comes as data files that each represent a recording session.
+There is, therefore, a natural ordering of the files by time,
+for when the recordings were made.
+The ordering is also commonly reflected by the way CHAT data files are named,
+typically by the age of the target child.
+For this reason, if your input data source is a ZIP file or local directory,
+the resulting :class:`~rustling.chat.CHAT` object has the data automatically sorted
+based on file paths.
+
+With the knowledge that data is ordered by files in a :class:`~rustling.chat.CHAT`,
+it is reasonable for a :class:`~rustling.chat.CHAT` to append or drop data,
+and to do so from either end for flexible data analysis and modeling.
+Think of a :class:`~rustling.chat.CHAT` object more or less like a double-ended queue.
+
+The following :class:`~rustling.chat.CHAT` methods support adding and removing data
+(many of them inspired by :class:`~collections.deque`):
+
+.. currentmodule:: rustling.chat.CHAT
+
+.. autosummary::
+
+    append
+    append_left
+    extend
+    extend_left
+    pop
+    pop_left
+    filter
+    clear
+
+Among these methods, :meth:`~rustling.chat.CHAT.filter` creates and
+returns a new :class:`~rustling.chat.CHAT`
+without altering the original one.
+All the other methods work by mutating the calling :class:`~rustling.chat.CHAT` in-place.
+
+For convenience, the addition operator ``+`` is defined for :class:`~rustling.chat.CHAT`
+objects, and can be used to concatenate two :class:`~rustling.chat.CHAT` objects.
+By extension, ``+=`` is also valid, so a statement in the form of ``reader1 += reader2``
+would mutate ``reader1`` by concatenating the two readers.
+
+A :class:`~rustling.chat.CHAT` can be iterated upon
+(e.g., ``for reader_one_file in reader: ...``),
+where the element in each iteration is a :class:`~rustling.chat.CHAT` for one data file.
+Slicing (``reader[:5]``, ``reader[3:6]``, etc) is also supported,
+which gives you a :class:`~rustling.chat.CHAT` object (which is iterable)
+for the specified data files.
+To inspect what data files are in a reader and their ordering
+(as well as extract their indices, if necessary),
+:meth:`~rustling.chat.CHAT.file_paths` gives you the list of file paths.
+
+The following example illustrates how to build a reader of Eve's utterances
+starting from an empty one and adding data to it one file at a time.
+
+.. code-block:: python
+
+    new_chat = CHAT()  # empty CHAT object
+    for eve_one_file in eve[:5]:
+        new_chat += eve_one_file  # Note that new_chat is updated in-place.
+        print(
+            "Number of utterances so far:",
+            len(new_chat.utterances()),
+        )
+
+    # Number of utterances so far: 1589
+    # Number of utterances so far: 2879
+    # Number of utterances so far: 3497
+    # Number of utterances so far: 4950
+    # Number of utterances so far: 6431
+
+:meth:`~rustling.chat.CHAT.filter` is designed to return
+a new :class:`~rustling.chat.CHAT`
+so that we can instantiate a source :class:`~rustling.chat.CHAT` for a TalkBank / CHILDES dataset
+and filter it down to specific file paths or participants.
+Typically, a dataset contains multiple participants' data
+organized by a directory structure.
+:meth:`~rustling.chat.CHAT.filter` allows us to easily create :class:`~rustling.chat.CHAT` objects
+for individual children without re-loading data from scratch:
+
+.. code-block:: python
+
+    path = "path/to/your/local/Brown.zip"
+    brown = rustling.read_chat(path)
+    brown.n_files  # All CHAT files in the Brown dataset
+    # 214
+
+    # Eve's data is all Brown/Eve/*.cha -- match the "Eve" substring
+    eve = brown.filter(files="Eve")
+    eve.n_files
+    # 20
+
+    eve_chi = eve.filter(participants="CHI")  # child speech
+    eve_chi.head()
+    # *CHI:  more             cookie       .
+    # %mor:  adj|more-Cmp-S1  noun|cookie  .
+    # %gra:  1|2|AMOD         2|2|ROOT     3|2|PUNCT
+    # %int:  distinctive , loud
+
+    # *CHI:  more             cookie       .
+    # %mor:  adj|more-Cmp-S1  noun|cookie  .
+    # %gra:  1|2|AMOD         2|2|ROOT     3|2|PUNCT
+    # %int:  distinctive , loud
+
+    # *CHI:  more             juice       ?
+    # %mor:  adj|more-Cmp-S1  noun|juice  ?
+    # %gra:  1|2|AMOD         2|2|ROOT    3|2|PUNCT
+
+    # *CHI:  Fraser        .
+    # %mor:  propn|Fraser  .
+    # %gra:  1|1|ROOT      2|1|PUNCT
+    # %com:  pronounces Fraser as fr&jdij .
+
+    # *CHI:  Fraser        .
+    # %mor:  propn|Fraser  .
+    # %gra:  1|1|ROOT      2|1|PUNCT
+
+
+    eve_cds = eve.filter(participants="^(?!CHI$)")  # child-directed speech, regex ^(?!CHI$) for "not CHI"
+    eve_cds.head()
+    # *MOT:  you                  more             cookies           ?
+    # %mor:  pron|you-Prs-Acc-S2  adj|more-Cmp-S1  noun|cookie-Plur  ?
+    # %gra:  1|3|NSUBJ            2|3|AMOD         3|3|ROOT          4|3|PUNCT
+
+    # *MOT:  how_about      another              graham        cracker       ?
+    # %mor:  intj|howabout  det|another-Def-Ind  noun|graham   noun|cracker  ?
+    # %gra:  1|4|DISCOURSE  2|4|DET              3|4|COMPOUND  4|4|ROOT      5|4|PUNCT
+
+    # *MOT:  would            that           do             just        as          well       ?
+    # %mor:  aux|would-Fin-S  pron|that-Dem  verb|do-Inf-S  adv|just    adv|as      adv|well   ?
+    # %gra:  1|3|AUX          2|3|NSUBJ      3|6|ROOT       4|5|ADVMOD  5|3|ADVMOD  6|5|FIXED  7|3|PUNCT
+
+    # *MOT:  here      .
+    # %mor:  adv|here  .
+    # %gra:  1|1|ROOT  2|1|PUNCT
+
+    # *MOT:  here      you                  go                       .
+    # %mor:  adv|here  pron|you-Prs-Nom-S2  verb|go-Fin-Ind-Pres-S2  .
+    # %gra:  1|3|ROOT  2|3|NSUBJ            3|1|ADVCL-RELCL          4|1|PUNCT

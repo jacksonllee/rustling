@@ -6,6 +6,7 @@ utterances, tokens, and annotations.
 """
 
 from rustling._lib_name import chat as _chat
+from rustling.chat._read_chat import read_chat
 
 Age = _chat.Age
 CHAT = _chat.CHAT
@@ -27,4 +28,5 @@ __all__ = [
     "Token",
     "Utterance",
     "Utterances",
+    "read_chat",
 ]

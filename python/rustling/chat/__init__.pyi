@@ -8,7 +8,11 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Literal, Sequence, overload
 
 if TYPE_CHECKING:
+    from rustling.conllu import CoNLLU
+    from rustling.elan import ELAN
     from rustling.ngram import Ngrams
+    from rustling.srt import SRT
+    from rustling.textgrid import TextGrid
 
 class Age:
     """Age in the CHAT format: years;months.days."""
@@ -438,6 +442,95 @@ class CHAT:
         ...
 
     @classmethod
+    def from_git(
+        cls,
+        url: str,
+        *,
+        rev: str | None = None,
+        depth: int | None = None,
+        match: str | None = None,
+        extension: str = ".cha",
+        cache_dir: str | os.PathLike[str] | None = None,
+        force_download: bool = False,
+        parallel: bool = True,
+        strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
+    ) -> CHAT:
+        """Load CHAT data from a git repository.
+
+        Clones the repository (or uses a cached clone) and parses all
+        matching files from the resulting directory.
+
+        Args:
+            url: Git repository URL.
+            rev: Branch, tag, or commit hash. If None, uses the
+                repository's default branch.
+            depth: Clone depth. Defaults to 1 (shallow clone).
+                Ignored when rev is a commit hash.
+            match: Regex pattern to include only matching file paths.
+            extension: File extension to filter by (default: ".cha").
+            cache_dir: Directory for caching cloned repositories.
+                Defaults to ``~/.rustling/cache/``.
+            force_download: If True, re-clone even if a cached copy exists.
+            parallel: If True, use parallel processing.
+            strict: If True (default), raise ValueError on mor/word
+                misalignment. If False, emit a warning and set tokens
+                to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier. Set to None to disable.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier. Set to None to disable.
+
+        Returns:
+            A new CHAT reader with the parsed data.
+        """
+        ...
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        *,
+        match: str | None = None,
+        extension: str = ".cha",
+        cache_dir: str | os.PathLike[str] | None = None,
+        force_download: bool = False,
+        parallel: bool = True,
+        strict: bool = True,
+        mor_tier: str | None = "%mor",
+        gra_tier: str | None = "%gra",
+    ) -> CHAT:
+        """Load CHAT data from a URL.
+
+        Downloads the file (or uses a cached copy) and parses it.
+        ZIP files are automatically detected and extracted.
+
+        Args:
+            url: URL to download from.
+            match: Regex pattern to include only matching file paths
+                (applicable for ZIP files).
+            extension: File extension to filter by (default: ".cha",
+                applicable for ZIP files).
+            cache_dir: Directory for caching downloads.
+                Defaults to ``~/.rustling/cache/``.
+            force_download: If True, re-download even if a cached
+                copy exists.
+            parallel: If True, use parallel processing.
+            strict: If True (default), raise ValueError on mor/word
+                misalignment. If False, emit a warning and set tokens
+                to an empty list for affected utterances.
+            mor_tier: Name of the dependent tier to treat as the
+                morphology tier. Set to None to disable.
+            gra_tier: Name of the dependent tier to treat as the
+                grammatical relation tier. Set to None to disable.
+
+        Returns:
+            A new CHAT reader with the parsed data.
+        """
+        ...
+
+    @classmethod
     def from_utterances(
         cls,
         utterances: Sequence[Utterance],
@@ -447,7 +540,7 @@ class CHAT:
         Creates a new reader containing a single virtual file with the given
         utterances. Useful for splitting a reader into sub-readers based on
         utterance boundaries. Raw lines are synthesized from each
-        utterance's ``tiers`` data, so ``to_strs()`` and ``to_chat()``
+        utterance's ``tiers`` data, so ``to_strs()`` and ``to_files()``
         produce valid CHAT output.
 
         Args:
@@ -859,24 +952,202 @@ class CHAT:
         """
         ...
 
-    def to_chat(
+    def to_files(
         self,
-        path: str | os.PathLike[str],
+        dir_path: str | os.PathLike[str],
+        /,
         *,
-        is_dir: bool = False,
         filenames: Sequence[str] | None = None,
     ) -> None:
-        """Write CHAT data to disk.
+        """Write CHAT (.cha) files to a directory.
 
         Args:
-            path: Output file path (or directory if is_dir is True).
-            is_dir: If True, write multiple files to the directory.
-            filenames: Custom filenames when writing to a directory.
-                If None, uses 0001.cha, 0002.cha, etc.
+            dir_path: Directory path to write .cha files to.
+            filenames: Custom filenames for the output files.
+                If None, filenames are derived from the original source
+                file paths (e.g., ``foo.cha`` stays ``foo.cha``). Falls
+                back to ``0001.cha``, ``0002.cha``, etc. when the data
+                was parsed from in-memory strings.
 
         Raises:
-            ValueError: If the reader has multiple files but is_dir is
-                False, or if filenames count doesn't match file count.
+            ValueError: If filenames count doesn't match file count.
+            IOError: If writing fails.
+        """
+        ...
+
+    def to_elan_strs(self) -> list[str]:
+        """Return EAF XML strings, one per file.
+
+        Converts the CHAT data to ELAN XML format. Each CHAT file
+        produces one EAF XML string. Participants become alignable
+        tiers, and dependent tiers (e.g., %mor, %gra) become
+        reference annotation tiers named ``{tier}@{participant}``
+        (e.g., ``mor@CHI``).
+
+        Returns:
+            A list of EAF XML strings.
+        """
+        ...
+
+    def to_elan(self) -> ELAN:
+        """Convert to an ELAN object.
+
+        Each CHAT file produces one ELAN file. Participants become
+        alignable tiers, and dependent tiers (e.g., %mor, %gra) become
+        reference annotation tiers named ``{tier}@{participant}``
+        (e.g., ``mor@CHI``).
+
+        Returns:
+            An :class:`~rustling.elan.ELAN` object.
+        """
+        ...
+
+    def to_elan_files(
+        self,
+        dir_path: str | os.PathLike[str],
+        /,
+        *,
+        filenames: Sequence[str] | None = None,
+    ) -> None:
+        """Write ELAN (.eaf) files to a directory.
+
+        Converts the CHAT data to ELAN XML format and writes .eaf files.
+        Each CHAT file produces one .eaf file. Participants become
+        alignable tiers, and dependent tiers (e.g., %mor, %gra) become
+        reference annotation tiers named ``{tier}@{participant}``
+        (e.g., ``mor@CHI``).
+
+        Args:
+            dir_path: Directory path to write .eaf files to.
+            filenames: Custom filenames for the output files.
+                If None, filenames are derived from the original source
+                file paths with the extension changed to ``.eaf``
+                (e.g., ``foo.cha`` becomes ``foo.eaf``). Falls back to
+                ``0001.eaf``, ``0002.eaf``, etc. when the data was
+                parsed from in-memory strings.
+
+        Raises:
+            ValueError: If filenames count doesn't match file count.
+            IOError: If writing fails.
+        """
+        ...
+
+    def to_srt_strs(
+        self,
+        *,
+        participants: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Return SRT format strings, one per file.
+
+        Args:
+            participants: Participant codes to include.
+                If None, all participants are included.
+                Utterances without time marks are skipped.
+
+        Returns:
+            A list of SRT-formatted strings.
+        """
+        ...
+
+    def to_srt(
+        self,
+        *,
+        participants: Sequence[str] | None = None,
+    ) -> SRT:
+        """Convert to an SRT object.
+
+        Each CHAT file produces one SRT file. When multiple participants
+        are present, subtitle text is prefixed with the participant code
+        (e.g., ``"CHI: more cookie ."``). Utterances without time marks
+        are skipped.
+
+        Args:
+            participants: Participant codes to include.
+                If None, all participants are included.
+
+        Returns:
+            A :class:`~rustling.srt.SRT` object.
+        """
+        ...
+
+    def to_srt_files(
+        self,
+        dir_path: str | os.PathLike[str],
+        /,
+        *,
+        participants: Sequence[str] | None = None,
+        filenames: Sequence[str] | None = None,
+    ) -> None:
+        """Write SRT (.srt) files to a directory.
+
+        Args:
+            dir_path: Directory path to write .srt files to.
+            participants: Participant codes to include.
+                If None, all participants are included.
+            filenames: Custom filenames for the output files.
+                If None, filenames are derived from the original source
+                file paths with the extension changed to ``.srt``.
+
+        Raises:
+            ValueError: If filenames count doesn't match file count.
+            IOError: If writing fails.
+        """
+        ...
+
+    def to_textgrid_strs(
+        self,
+        *,
+        participants: Sequence[str] | None = None,
+    ) -> list[str]:
+        """Return TextGrid format strings, one per file."""
+        ...
+
+    def to_textgrid(
+        self,
+        *,
+        participants: Sequence[str] | None = None,
+    ) -> TextGrid:
+        """Convert to a TextGrid object."""
+        ...
+
+    def to_textgrid_files(
+        self,
+        dir_path: str | os.PathLike[str],
+        /,
+        *,
+        participants: Sequence[str] | None = None,
+        filenames: Sequence[str] | None = None,
+    ) -> None:
+        """Write TextGrid (.TextGrid) files to a directory."""
+        ...
+
+    def to_conllu_strs(self) -> list[str]:
+        """Return CoNLL-U format strings, one per file."""
+        ...
+
+    def to_conllu(self) -> CoNLLU:
+        """Convert to a CoNLL-U object.
+
+        Returns:
+            A :class:`~rustling.conllu.CoNLLU` object.
+        """
+        ...
+
+    def to_conllu_files(
+        self,
+        dir_path: str | os.PathLike[str],
+        /,
+        *,
+        filenames: Sequence[str] | None = None,
+    ) -> None:
+        """Write CoNLL-U (.conllu) files to a directory.
+
+        Args:
+            dir_path: Directory path to write .conllu files to.
+            filenames: Custom filenames for the output files.
+
+        Raises:
+            ValueError: If filenames count doesn't match file count.
             IOError: If writing fails.
         """
         ...
@@ -902,6 +1173,39 @@ class CHAT:
     def __eq__(self, other: object) -> bool: ...
     def __hash__(self) -> int: ...
 
+def read_chat(
+    path: str | os.PathLike[str],
+    *,
+    filter_files: str | Sequence[str] | None = None,
+    filter_participants: str | Sequence[str] | None = None,
+    cls: type[CHAT] = CHAT,
+    strict: bool = True,
+) -> CHAT:
+    """Read CHAT data.
+
+    Args:
+        path: Path to a ``.zip`` file, a local directory containing ``.cha``
+            files, a single ``.cha`` file, a git repository URL
+            (ending in ``.git``), or an HTTP/HTTPS URL.
+        filter_files: Filename(s) to keep.
+            Regular expression matching is supported.
+            If ``None``, all files are included.
+        filter_participants: Participant code(s) to keep.
+            Regular expression matching is supported.
+            If ``None``, all participants are included.
+        cls: The class used to create the reader. Must be ``CHAT`` or a
+            subclass of it.
+        strict: If ``True``, enforce strict parsing of the CHAT data.
+
+    Returns:
+        A ``CHAT`` instance filtered by the specified files and participants.
+
+    Raises:
+        TypeError: If *cls* is not ``CHAT`` or a subclass of it.
+        ValueError: If *path* does not point to a recognized source.
+    """
+    ...
+
 __all__ = [
     "Age",
     "CHAT",
@@ -912,4 +1216,5 @@ __all__ = [
     "Token",
     "Utterance",
     "Utterances",
+    "read_chat",
 ]
