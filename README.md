@@ -8,6 +8,7 @@
 [![PyPI](https://img.shields.io/pypi/v/rustling.svg)](https://pypi.org/project/rustling/)
 [![Conda Version](https://img.shields.io/conda/vn/conda-forge/rustling.svg)](https://anaconda.org/conda-forge/rustling)
 [![crates.io](https://img.shields.io/crates/v/rustling.svg)](https://crates.io/crates/rustling)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19140734.svg)](https://doi.org/10.5281/zenodo.19140734)
 
 Rustling is a blazingly fast library for computational linguistics.
 It aims to provide flexible and efficient tools to facilitate further research.

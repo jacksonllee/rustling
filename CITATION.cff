@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: Rustling
+abstract: "A blazingly fast library for computational linguistics"
+type: software
+authors:
+  - family-names: Lee
+    given-names: Jackson L.
+repository-code: "https://github.com/jacksonllee/rustling"
+url: "https://docs.rustling.io/"
+license: MIT
+doi: "10.5281/zenodo.19140734"

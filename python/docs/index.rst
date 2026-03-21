@@ -21,6 +21,10 @@ Rustling
    :target: https://anaconda.org/conda-forge/rustling
    :alt: conda-forge version
 
+.. image:: https://zenodo.org/badge/DOI/10.5281/zenodo.19140734.svg
+   :target: https://doi.org/10.5281/zenodo.19140734
+   :alt: Zenodo
+
 .. raw:: html
 
    <br/><br/>
