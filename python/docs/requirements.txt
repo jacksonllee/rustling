@@ -41,7 +41,7 @@ pygments==2.19.2
     #   sphinx
 pyyaml==6.0.3
     # via sphinx-autoapi
-requests==2.32.5
+requests==2.33.0
     # via sphinx
 roman-numerals==4.1.0
     # via sphinx
