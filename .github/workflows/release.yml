@@ -123,6 +123,23 @@ jobs:
           version: "4.0.9"
           actions-cache-folder: emsdk-cache
 
+      - name: Patch Emscripten for Rust side module exports
+        run: |
+          # Rust side modules have mangled symbol names containing '$' which Emscripten
+          # rejects as invalid export names. These symbols are called from native code,
+          # not JavaScript, so the check is unnecessary for side modules.
+          # Upstream: https://github.com/emscripten-core/emscripten/pull/24359
+          EMSCRIPTEN_DIR=$(em-config EMSCRIPTEN_ROOT)
+          python3 -c "
+          import pathlib
+          p = pathlib.Path('$EMSCRIPTEN_DIR/tools/emscripten.py')
+          code = p.read_text()
+          old = '''  for n in unexpected_exports:\n    if not n.isidentifier():\n      exit_with_error(f'invalid export name: {n}')'''
+          new = '''  if not settings.SIDE_MODULE:\n    for n in unexpected_exports:\n      if not n.isidentifier():\n        exit_with_error(f'invalid export name: {n}')'''
+          assert old in code, 'Patch target not found in emscripten.py — upstream may have changed'
+          p.write_text(code.replace(old, new))
+          "
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
