@@ -193,15 +193,6 @@ jobs:
           version: "4.0.9"
           actions-cache-folder: emsdk-cache
 
-      - name: Patch Emscripten for Rust side module exports
-        run: |
-          # Rust side modules have mangled symbol names containing '$' which Emscripten
-          # rejects as invalid export names. These symbols are called from native code,
-          # not JavaScript, so the check is unnecessary for side modules.
-          # Upstream: https://github.com/emscripten-core/emscripten/pull/24359
-          EMSCRIPTEN_DIR=$(em-config EMSCRIPTEN_ROOT)
-          curl -sL https://raw.githubusercontent.com/pyodide/pyodide/refs/heads/main/emsdk/patches/0002-Don-t-check-exports-for-being-valid-C-C-identifiers-.patch | git -C "$EMSCRIPTEN_DIR" apply
-
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
