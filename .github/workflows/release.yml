@@ -118,7 +118,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Emscripten SDK
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v15
         with:
           version: "4.0.9"
           actions-cache-folder: emsdk-cache
@@ -130,7 +130,15 @@ jobs:
           # not JavaScript, so the check is unnecessary for side modules.
           # Upstream: https://github.com/emscripten-core/emscripten/pull/24359
           EMSCRIPTEN_DIR=$(em-config EMSCRIPTEN_ROOT)
-          curl -sL https://raw.githubusercontent.com/pyodide/pyodide/refs/heads/main/emsdk/patches/0002-Don-t-check-exports-for-being-valid-C-C-identifiers-.patch | git -C "$EMSCRIPTEN_DIR" apply
+          python3 -c "
+          import pathlib
+          p = pathlib.Path('$EMSCRIPTEN_DIR/tools/emscripten.py')
+          code = p.read_text()
+          old = '''  for n in unexpected_exports:\n    if not n.isidentifier():\n      exit_with_error(f'invalid export name: {n}')'''
+          new = '''  if not settings.SIDE_MODULE:\n    for n in unexpected_exports:\n      if not n.isidentifier():\n        exit_with_error(f'invalid export name: {n}')'''
+          assert old in code, 'Patch target not found in emscripten.py — upstream may have changed'
+          p.write_text(code.replace(old, new))
+          "
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
