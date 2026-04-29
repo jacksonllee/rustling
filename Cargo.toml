@@ -24,7 +24,7 @@ crate-type = ["rlib"]
 pyo3 = { version = "0.28.2", features = ["abi3-py310"], optional = true }
 rand = "0.10"
 rayon = { version = "1.10", optional = true }
-fancy-regex = "0.17"
+fancy-regex = "0.18"
 regex = "1"
 rustc-hash = "2.1"
 flatbuffers = "25.12.19"
