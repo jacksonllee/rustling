@@ -21,7 +21,7 @@ name = "rustling"
 crate-type = ["rlib"]
 
 [dependencies]
-pyo3 = { version = "0.28.2", features = ["abi3-py310"], optional = true }
+pyo3 = { version = "0.29.0", features = ["abi3-py310"], optional = true }
 rand = "0.10"
 rayon = { version = "1.10", optional = true }
 fancy-regex = "0.17"
