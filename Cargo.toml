@@ -33,7 +33,7 @@ serde_json = "1.0"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 zip = "8"
-quick-xml = { version = "0.39", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 zstd = "0.13"
 
 [dev-dependencies]
