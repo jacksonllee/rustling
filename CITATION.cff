@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: Rustling
-abstract: "A blazingly fast library for computational linguistics"
+abstract: "A high-performance library for computational linguistics"
 type: software
 authors:
   - family-names: Lee

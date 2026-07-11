@@ -3,7 +3,7 @@ Rustling
 
 .. meta::
    :description:
-      Rustling: A Blazingly Fast Libray for Computational Linguistics
+      Rustling: A High-performance Libray for Computational Linguistics
    :keywords: rustling, computational linguistics, natural language processing, nlp, python,
       word segmentation, part-of-speech tagging, language models, ngrams,
       childes, talkbank, chat,
@@ -44,7 +44,7 @@ Rustling
    textgrid
    api
 
-Rustling is a blazingly fast library for computational linguistics.
+Rustling is a high-performance library for computational linguistics.
 It aims to provide flexible and efficient tools to facilitate further research.
 
 Currently implemented features:

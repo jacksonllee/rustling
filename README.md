@@ -10,7 +10,7 @@
 [![crates.io](https://img.shields.io/crates/v/rustling.svg)](https://crates.io/crates/rustling)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19140734.svg)](https://doi.org/10.5281/zenodo.19140734)
 
-Rustling is a blazingly fast library for computational linguistics.
+Rustling is a high-performance library for computational linguistics.
 It aims to provide flexible and efficient tools to facilitate further research.
 
 Documentation: [Python](https://docs.rustling.io/) | [Rust](https://docs.rs/rustling)

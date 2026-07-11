@@ -149,10 +149,7 @@ impl<K: Eq + Hash + Clone, V> Trie<K, V> {
     {
         let mut node = &self.root;
         for element in sequence {
-            match node.children.get(&element) {
-                Some(child) => node = child,
-                None => return None,
-            }
+            node = node.children.get(&element)?;
         }
         node.terminal.as_ref()
     }
@@ -182,10 +179,7 @@ impl<K: Eq + Hash + Clone, V> Trie<K, V> {
     {
         let mut node = &self.root;
         for element in sequence {
-            match node.children.get(&element) {
-                Some(child) => node = child,
-                None => return None,
-            }
+            node = node.children.get(&element)?;
         }
         Some(node)
     }

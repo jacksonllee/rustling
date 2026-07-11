@@ -1,6 +1,6 @@
 //! # Rustling
 //!
-//! Rustling is a blazingly fast library for computational linguistics.
+//! Rustling is a high-performance library for computational linguistics.
 //! It aims to provide flexible and efficient tools to facilitate further research.
 //! It is written in Rust, with Python bindings.
 //!

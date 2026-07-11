@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rustling"
-description = "A blazingly fast library for computational linguistics"
+description = "A high-performance library for computational linguistics"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

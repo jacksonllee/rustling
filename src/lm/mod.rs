@@ -450,8 +450,7 @@ fn load_lm_flatbuffers<T: BaseLanguageModel>(lm: &mut T, bytes: &[u8]) -> Result
     *lm.counts_mut() = CountTrie::new();
     for entry in model.ngrams().iter() {
         let ngram: Vec<String> = entry.ngram().iter().map(|s| s.to_owned()).collect();
-        lm.counts_mut()
-            .insert_count(ngram.into_iter(), entry.count());
+        lm.counts_mut().insert_count(ngram, entry.count());
     }
 
     lm.set_fitted(true);
