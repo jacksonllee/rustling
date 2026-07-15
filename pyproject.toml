@@ -78,7 +78,7 @@ docs = [
     "sphinx-copybutton >= 0.5.2",
 ]
 benchmarks = [
-    "wordseg >= 0.0.4",
+    "wordseg >= 0.0.5",
     "pycantonese @ git+https://github.com/jacksonllee/pycantonese.git@3485a6c78495d1415d5228b2c94dd1a37c58ed9a",
     "nltk >= 3.8",
     "pylangacq @ git+https://github.com/jacksonllee/pylangacq.git@5161b686296d905d5226c9a4e126834ddbf669f5",
