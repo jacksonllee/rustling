@@ -94,6 +94,18 @@ pub struct Utterance {
 }
 
 impl Utterance {
+    /// Raw annotated main-tier transcript with CHAT coding intact, or None for headers.
+    ///
+    /// Returns the original main-tier text exactly as it appears in the CHAT
+    /// source, including markers for pauses, overlaps, repetitions, retracings,
+    /// postcodes, etc. Returns `None` for changeable headers and for manually
+    /// constructed utterances that have no tier data.
+    pub fn annotated(&self) -> Option<String> {
+        let participant = self.participant.as_deref()?;
+        let tiers = self.tiers.as_ref()?;
+        tiers.get(participant).cloned()
+    }
+
     /// Audibly faithful transcript of this utterance, or None for headers.
     ///
     /// When tier data is available the result is computed from the original
@@ -849,6 +861,57 @@ mod tests {
             gra_tier_name: Some("%gra".to_string()),
         };
         assert_eq!(utt.audible(), Some("I want cookie .".to_string()));
+    }
+
+    #[test]
+    fn test_annotated_from_tiers() {
+        // Annotated returns the raw main tier with CHAT coding intact.
+        let mut tiers = HashMap::new();
+        tiers.insert("CHI".to_string(), "no [x 3] . [+ IMP]".to_string());
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![]),
+            time_marks: None,
+            tiers: Some(tiers),
+            changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
+        };
+        assert_eq!(utt.annotated(), Some("no [x 3] . [+ IMP]".to_string()));
+    }
+
+    #[test]
+    fn test_annotated_no_tiers() {
+        // Without tier data there is no raw main tier to return.
+        let utt = Utterance {
+            participant: Some("CHI".to_string()),
+            tokens: Some(vec![Token {
+                word: "hi".to_string(),
+                pos: None,
+                mor: None,
+                gra: None,
+            }]),
+            time_marks: None,
+            tiers: None,
+            changeable_header: None,
+            mor_tier_name: Some("%mor".to_string()),
+            gra_tier_name: Some("%gra".to_string()),
+        };
+        assert_eq!(utt.annotated(), None);
+    }
+
+    #[test]
+    fn test_annotated_changeable_header() {
+        let utt = Utterance {
+            participant: None,
+            tokens: None,
+            time_marks: None,
+            tiers: None,
+            changeable_header: Some(ChangeableHeader::NewEpisode {}),
+            mor_tier_name: None,
+            gra_tier_name: None,
+        };
+        assert_eq!(utt.annotated(), None);
     }
 
     #[test]

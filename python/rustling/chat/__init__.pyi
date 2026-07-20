@@ -223,6 +223,10 @@ class Utterance:
     """Speaker code (e.g., "CHI", "MOT"), or None for headers."""
     tokens: list[Token] | None
     """List of tokens in this utterance, or None for headers."""
+    annotated: str | None
+    """Raw main-tier transcript with CHAT coding intact (pauses, overlaps,
+    repetitions, retracings, postcodes, etc.), or None for headers and for
+    utterances constructed without tier data."""
     audible: str | None
     """Audibly faithful transcript of this utterance, or None for headers."""
     time_marks: tuple[int, int] | None

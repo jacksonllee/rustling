@@ -5,10 +5,14 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Python deps in pyproject.toml are pinned loosely and updated by hand.
+  # A limit of 0 disables version-update PRs while still allowing
+  # Dependabot *security* updates, which ignore this setting.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
 
   - package-ecosystem: "github-actions"
     directory: "/"

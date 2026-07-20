@@ -176,6 +176,26 @@ class TestUtterances:
         utt = Utterance()
         assert utt.audible is None
 
+    def test_utterance_annotated(self):
+        reader = CHAT.from_strs([BASIC_CHAT])
+        utts = reader.utterances()
+        assert utts[0].annotated == "I want cookie ."
+
+    def test_utterance_annotated_preserves_coding(self):
+        reader = CHAT.from_strs(["*CHI:\tno [x 3] ."])
+        utts = reader.utterances()
+        assert utts[0].annotated == "no [x 3] ."
+        assert utts[0].audible == "no no no ."
+
+    def test_utterance_annotated_constructed(self):
+        # No tier data -> annotated is None (audible would join tokens).
+        utt = Utterance(tokens=[Token("hello"), Token("world")])
+        assert utt.annotated is None
+
+    def test_utterance_annotated_none_tokens(self):
+        utt = Utterance()
+        assert utt.annotated is None
+
 
 class TestTokens:
     def test_token_pos(self):

@@ -194,6 +194,12 @@ impl PyUtterance {
         self.0.gra_tier_name.as_deref()
     }
 
+    /// Raw annotated main-tier transcript with CHAT coding intact, or None for headers.
+    #[getter]
+    fn annotated(&self) -> Option<String> {
+        self.0.annotated()
+    }
+
     /// Audibly faithful transcript of this utterance, or None for headers.
     #[getter]
     fn audible(&self) -> Option<String> {

@@ -466,32 +466,58 @@ to organize the results at the file level:
     # 741
 
 
-Audibly Faithful Transcription
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Annotated versus Audibly Faithful
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The ``audible`` attribute of an :class:`~rustling.chat.Utterance` object
-gives you a transcription that faithfully represents what was audibly spoken,
-with CHAT coding conventions (e.g., ``[+ IMP]``) stripped out
-while preserving repetitions and retracings as they were heard:
+An :class:`~rustling.chat.Utterance` exposes two views of the main tier
+as plain strings: ``annotated`` and ``audible``. They serve different
+purposes, so it's worth knowing when to reach for which.
+
+The ``annotated`` attribute returns the main tier exactly as written in
+the source CHAT file, with all CHILDES coding conventions left intact --
+pauses, overlap markers, repetitions, retracings, postcodes, and so on.
+Use it when you need to inspect or preserve the original coding, for
+example to study specific speech behaviors in detail.
+
+The ``audible`` attribute returns a transcription that faithfully
+represents what was *audibly spoken*: CHAT coding conventions
+(e.g., ``[+ IMP]``) are stripped out, while repetitions are expanded
+and retracings are kept as they were heard. Use it for tasks where the
+goal is to model the speech signal, such as automatic speech recognition
+(ASR) and forced alignment, where the text should match what was audibly
+produced.
 
 .. code-block:: python
 
     from rustling.chat import CHAT
 
-    # Repetitions marked with [x N] are expanded:
+    # Postcodes are preserved in `annotated` and stripped in `audible`:
+    data0 = CHAT.from_strs(["*CHI:\tmore cookie . [+ IMP]"])
+    u0 = data0.utterances()[0]
+    u0.annotated
+    # 'more cookie . [+ IMP]'
+    u0.audible
+    # 'more cookie .'
+
+    # Repetitions marked with [x N] are kept as a code in `annotated`
+    # and expanded in `audible`:
     data1 = CHAT.from_strs(["*CHI:\tno [x 3] ."])
-    data1.utterances()[0].audible
+    u1 = data1.utterances()[0]
+    u1.annotated
+    # 'no [x 3] .'
+    u1.audible
     # 'no no no .'
 
-    # Retracings are kept as spoken:
+    # Retracings stay marked in `annotated` and play out as spoken in `audible`:
     data2 = CHAT.from_strs(["*CHI:\tI want [/] I want cookie ."])
-    data2.utterances()[0].audible
+    u2 = data2.utterances()[0]
+    u2.annotated
+    # 'I want [/] I want cookie .'
+    u2.audible
     # 'I want I want cookie .'
 
-This transcription is useful for tasks where the goal is to model
-the actual speech signal, such as automatic speech recognition (ASR)
-and forced alignment, where to the extent possible the text matches what was audibly produced.
-For changeable header entries, ``audible`` is ``None``.
+For changeable header entries (see below),
+both ``annotated`` and ``audible`` are ``None``.
 
 
 Changeable Headers

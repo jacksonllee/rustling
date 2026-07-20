@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-20
+
+### Added
+
+- CHAT data: New attribute `Utterance.annotated` for the main tier transcription
+  with all TalkBank annotations preserved
+
 ## [0.8.0] - 2026-03-20
 
 ### Added
