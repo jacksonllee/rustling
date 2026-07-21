@@ -12,7 +12,6 @@ use super::reader::{
 };
 use super::utterance::Utterance;
 use super::utterance_py::{PyToken, PyUtterance, PyUtterances};
-use crate::chat::validation::{ValidationError, validate_chat_file};
 use crate::ngram::{BaseNgrams, Ngrams, PyNgrams};
 use crate::persistence::pathbuf_to_string;
 
@@ -185,28 +184,32 @@ fn chat_error_to_pyerr(e: ChatError) -> pyo3::PyErr {
     }
 }
 
-/// Validate all files in a Chat and return collected errors.
-fn validate_chat(chat: &Chat) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-    for file in chat.files() {
-        errors.extend(validate_chat_file(
-            &file.file_path,
-            &file.headers,
-            &file.events,
-            &file.raw_lines,
-        ));
-    }
-    errors
-}
-
-/// Check validation errors and either raise or silently pass.
-fn handle_validation_errors(errors: &[ValidationError], strict: bool) -> PyResult<()> {
-    if errors.is_empty() || !strict {
+/// Apply the strict-mode validation policy over chatter's diagnostics.
+///
+/// Semantic validation is performed by the official TalkBank `chatter` crates
+/// and its diagnostics are stored on each [`ChatFile`] (only when the file was
+/// loaded with `validate=true`, i.e. a `strict=True` file loader). Only
+/// error-severity diagnostics can raise; mor/gra count-mismatch diagnostics are
+/// dropped here because they are surfaced separately via the misalignment
+/// channel ([`handle_misalignments`]). The first surviving error is raised as a
+/// `ValueError`, matching the legacy "raise the first validation error"
+/// behavior.
+fn handle_diagnostics(chat: &Chat, strict: bool) -> PyResult<()> {
+    if !strict {
         return Ok(());
     }
-    // Raise the first validation error.
-    let msg = &errors[0].message;
-    Err(pyo3::exceptions::PyValueError::new_err(msg.clone()))
+    for file in chat.files() {
+        for d in &file.diagnostics {
+            if !d.is_error || d.code.contains("CountMismatch") {
+                continue;
+            }
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{}: [{}] {}",
+                d.file_path, d.code, d.message
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -561,11 +564,18 @@ impl PyChat {
         }
         let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
         let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::from_strs(strs, ids, parallel, mor_key.as_deref(), gra_key.as_deref());
+        // String input is treated leniently (bare fragments are common and
+        // valid via `from_strs`), so chatter's file-level validation is not run;
+        // only mor/word misalignment is reported.
+        let (chat, misalignments) = Chat::from_strs(
+            strs,
+            ids,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+            false,
+        );
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -607,12 +617,16 @@ impl PyChat {
             .collect::<PyResult<_>>()?;
         let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
         let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::read_files(&paths, parallel, mor_key.as_deref(), gra_key.as_deref())
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let (chat, misalignments) = Chat::read_files(
+            &paths,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+            strict,
+        )
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_diagnostics(&chat, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -646,11 +660,11 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_diagnostics(&chat, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -684,11 +698,11 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_diagnostics(&chat, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -729,11 +743,11 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_diagnostics(&chat, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -770,11 +784,11 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
         handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_diagnostics(&chat, strict)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);

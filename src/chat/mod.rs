@@ -7,6 +7,7 @@
 mod clean_utterance;
 mod conllu_writer;
 mod elan_writer;
+mod from_chatter;
 pub(crate) mod header;
 #[cfg(feature = "pyo3")]
 mod header_py;
@@ -19,7 +20,6 @@ mod textgrid_writer;
 mod utterance;
 #[cfg(feature = "pyo3")]
 mod utterance_py;
-pub(crate) mod validation;
 
 pub use header::{Age, ChangeableHeader, Headers, Participant};
 pub use reader::{

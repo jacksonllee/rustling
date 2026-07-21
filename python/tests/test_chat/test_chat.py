@@ -629,50 +629,34 @@ class TestFromDir:
             )
 
     def test_testchat_bad_files_catch_errors(self, testchat_bad_dir):
-        """Every testchat/bad file must raise a parsing error with strict=True."""
-        # Files requiring complex cross-tier or context-dependent checks
-        # not yet implemented (Tier 3+4 validation rules).
+        """Every testchat/bad file must raise a parsing error with strict=True.
+
+        CHAT parsing/validation is delegated to the official TalkBank ``chatter``
+        crates. The exceptions below are the testchat/bad files that ``chatter``
+        v0.3.6 does not yet flag as errors (context-dependent checks such as
+        cross-tier consistency and retrace context). This list is expected to
+        shrink as ``chatter`` matures; v0.3.6 already caught three files that
+        v0.3.2 missed (CA segment repetition and letter form markers).
+        """
         known_exceptions = {
-            # Cross-tier checks (%mor, %gra, %pho):
-            "mor-commas.cha",
-            "mor-empty.cha",
-            "latetalkers.cha",
+            # Cross-tier (%mor) context checks:
             "mornumber-spanish.cha",
-            "mornumber-spanish-2.cha",
-            "pho-group-compound.cha",
-            "pho-repetition.cha",
-            "pho-repetition-bad.cha",
-            # Media status vs bullet validation:
-            "media-needs-bullets.cha",
+            # Media validation:
+            "media-bad-name.cha",
             "media-notrans-bullets.cha",
-            "media-unlinked-bullets.cha",
             # Retrace followed-by-content checks:
             "retrace-in-group-bad.cha",
             "retrace-multiple-no-following.cha",
             "retrace-no-following-content.cha",
-            # Quotation nesting:
-            "quotation-nested.cha",
-            # Language-level checks:
-            "language-different-speakers.cha",
-            "zho-f.cha",
-            # CA segment repetition:
-            "ca-segment-repetition.cha",
-            "ca-segment-repetition-bad-content.cha",
-            # [x N] bracket context:
-            "repetition.cha",
-            "grouprepetition.cha",
-            "x-repetition.cha",
-            # @Options sign/heritage/bullet required:
-            "sign.cha",
-            "words-sign.cha",
-            "heritage.cha",
-            "heritage-lsfal14a.cha",
-            "bs5.cha",
-            # Participant code edge cases:
-            "who.cha",
-            # Other:
-            "zero-others.cha",
+            # Form / marker / terminator / language context checks:
+            "language-code.cha",
+            "pause-word.cha",
             "space-bracket.cha",
+            "toneterminator.cha",
+            # Participant code and zero-form edge cases:
+            "who.cha",
+            "zero-others.cha",
+            "zero-word.cha",
         }
         no_error_files = []
         for path in sorted(testchat_bad_dir.glob("*.cha")):
@@ -1093,7 +1077,9 @@ class TestToFiles:
         reader = CHAT.from_strs([BASIC_CHAT])
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.words() == reader.words()
 
     def test_to_files_with_path(self, tmp_path):
@@ -1101,14 +1087,18 @@ class TestToFiles:
         reader = CHAT.from_strs([BASIC_CHAT])
         out_dir = tmp_path / "output"
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.words() == reader.words()
 
     def test_to_files_directory(self, tmp_path):
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.n_files == 2
 
     def test_to_files_custom_filenames(self, tmp_path):

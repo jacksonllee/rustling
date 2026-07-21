@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CHAT parsing and validation are now powered by the official TalkBank
+  [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
+  `talkbank-parser`) instead of rustling's own hand-written parser. The Python
+  API is unchanged. Because `chatter` is not yet published to crates.io, it is
+  pinned as a git dependency (tag `v0.3.6`); consequently rustling's own
+  publishing to crates.io is paused until `chatter` 1.0 reaches crates.io. PyPI
+  wheel distribution is unaffected.
+- CHAT validation now follows the official CLAN-CHECK-parity rules from
+  `chatter`, so `strict=True` file loading flags more issues than before and
+  error messages differ. `CHAT.from_strs` remains lenient (no file-level
+  validation), matching prior behavior for bare-fragment input.
+- The `[x N]` repetition annotation, which TalkBank has abandoned (transcripts
+  should spell out repetitions explicitly), is no longer parsed: `strict=True`
+  rejects files containing it, and under lenient parsing the marker degrades
+  the utterance's word tokens (its content can surface as word tokens and drop
+  the rest of the utterance). `Utterance.annotated` preserves the raw main
+  tier, and `Utterance.audible` still expands `[x N]` (e.g., `play [x 3]` →
+  `play play play`) for legacy transcripts.
+
+### Known limitations
+
+- `chatter` v0.3.6 does not yet implement a few context-dependent checks
+  (cross-tier consistency, retrace context, and similar; see the known
+  exceptions in `test_testchat_bad_files_catch_errors` for the exact list).
+  These are expected to be addressed as `chatter` matures toward 1.0.
+
 ## [0.9.0] - 2026-07-20
 
 ### Added

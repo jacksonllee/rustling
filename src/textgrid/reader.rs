@@ -921,7 +921,7 @@ pub trait BaseTextGrid: Sized {
                 }
             })
             .collect();
-        let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None);
+        let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None, false);
         chat
     }
 

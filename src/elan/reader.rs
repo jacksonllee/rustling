@@ -488,7 +488,7 @@ pub trait BaseElan: Sized {
             })
             .collect();
         // Disable mor+gra parsing: ELAN-derived CHAT doesn't have parsed tokens.
-        let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None);
+        let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None, false);
         chat
     }
 

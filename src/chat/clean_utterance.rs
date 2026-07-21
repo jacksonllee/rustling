@@ -13,15 +13,6 @@ use std::sync::LazyLock;
 // Segment types produced by the tokenizer
 // ---------------------------------------------------------------------------
 
-/// Controls whether the cleaning pipeline produces tokens for linguistic
-/// analysis ([`Clean`](Mode::Clean)) or an audibly faithful transcription
-/// ([`Audible`](Mode::Audible)).
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Clean,
-    Audible,
-}
-
 enum Segment {
     /// A regular word or punctuation token.
     Word(String),
@@ -29,13 +20,10 @@ enum Segment {
     AngleGroup(Vec<String>),
     /// Any annotation bracket that should be silently dropped.
     Drop,
-    /// `[: replacement]` — replace the preceding Word/AngleGroup with these words.
-    Replace(Vec<String>),
-    /// `[:: …]` — keep the preceding Word/AngleGroup, discard this bracket.
+    /// `[:: …]` (and `[: …]` in audible mode) — keep the preceding
+    /// Word/AngleGroup, discard this bracket.
     KeepOriginal,
-    /// `[/]`, `[//]`, `[///]`, `[/?]`, `[/-]` — drop the preceding Word/AngleGroup.
-    Retracing,
-    /// `[x N]` — repeat the preceding Word/AngleGroup N times total (audible mode).
+    /// `[x N]` — repeat the preceding Word/AngleGroup N times total.
     Expand(usize),
 }
 
@@ -50,44 +38,7 @@ enum OutputItem {
 // Static data for word filtering (Stage 5 — kept from original)
 // ---------------------------------------------------------------------------
 
-static ESCAPE_PREFIXES: &[&str] = &[
-    "[?", "[/", "[<", "[>", "[:", "[!", "[*", "+\"", "+,", "<&", "&",
-];
-
 static ESCAPE_SUFFIXES: &[&str] = &["\u{21ab}xxx"]; // ↫xxx
-
-static ESCAPE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [
-        "0",
-        "++",
-        "+<",
-        "+^",
-        "(.)",
-        "(..)",
-        "(...)",
-        ":",
-        ";",
-        ";;",
-        "<",
-        ">",
-        "xx",
-        "yy",
-        "xxx",
-        "yyy",
-        "www",
-        "www:",
-        "xxx:",
-        "xxx;",
-        "xxx;;",
-        "xxx\u{2192}", // xxx→
-        "xxx\u{2191}", // xxx↑
-        "xxx@si",
-        "yyy:",
-        "\u{2192}", // →
-    ]
-    .into_iter()
-    .collect()
-});
 
 static KEEP_PREFIXES: &[&str] = &["+\"/", "+,/", "+\"."];
 
@@ -117,18 +68,13 @@ fn should_start_angle_group(chars: &[char], pos: usize, word_buf: &str) -> bool 
 
 /// Classify the text between `[` and `]` into a [`Segment`].
 ///
-/// In [`Mode::Audible`], retracings become no-ops (preceding material is kept),
-/// replacements keep the original word, and `[x N]` expands repetitions.
-fn classify_bracket(content: &str, mode: Mode) -> Segment {
+/// Retracings become no-ops (preceding material is kept), replacements keep the
+/// original word, and `[x N]` expands repetitions — the audibly faithful view.
+fn classify_bracket(content: &str) -> Segment {
     // Standalone codes (exact match after trimming).
     match content.trim() {
-        "/" | "//" | "///" | "/?" | "/-" | "e" => {
-            return match mode {
-                Mode::Clean => Segment::Retracing,
-                // Audible: keep preceding material — just drop the bracket.
-                Mode::Audible => Segment::Drop,
-            };
-        }
+        // Retracings keep the preceding material — just drop the bracket.
+        "/" | "//" | "///" | "/?" | "/-" | "e" => return Segment::Drop,
         "?" | "!" | "!!" | "^c" | "*" => return Segment::Drop,
         _ => {}
     }
@@ -149,15 +95,9 @@ fn classify_bracket(content: &str, mode: Mode) -> Segment {
         let _ = rest; // content is unused; we just keep the preceding element.
         return Segment::KeepOriginal;
     }
-    if let Some(rest) = content.strip_prefix(": ") {
-        return match mode {
-            Mode::Clean => {
-                let words: Vec<String> = rest.split_whitespace().map(String::from).collect();
-                Segment::Replace(words)
-            }
-            // Audible: keep original word, discard replacement.
-            Mode::Audible => Segment::KeepOriginal,
-        };
+    if content.strip_prefix(": ").is_some() {
+        // Keep the original word, discard the replacement (audible view).
+        return Segment::KeepOriginal;
     }
 
     // Drop patterns: [= …], [+ …], [* …], [% …], [- …], [^ …], [# …],
@@ -179,10 +119,7 @@ fn classify_bracket(content: &str, mode: Mode) -> Segment {
     // [x N] — repetition count.
     if let Some(rest) = content.strip_prefix("x ") {
         if let Ok(n) = rest.trim().parse::<usize>() {
-            return match mode {
-                Mode::Clean => Segment::Drop,
-                Mode::Audible => Segment::Expand(n),
-            };
+            return Segment::Expand(n);
         }
         // Unparseable — fall through to drop.
         return Segment::Drop;
@@ -236,7 +173,7 @@ fn is_timed_pause(content: &str) -> bool {
 }
 
 /// Tokenize a CHAT utterance string into structural segments.
-fn tokenize(input: &str, mode: Mode) -> Vec<Segment> {
+fn tokenize(input: &str) -> Vec<Segment> {
     let chars: Vec<char> = input.chars().collect();
     let len = chars.len();
     let mut segments: Vec<Segment> = Vec::new();
@@ -269,7 +206,7 @@ fn tokenize(input: &str, mode: Mode) -> Vec<Segment> {
                 if i < len {
                     i += 1;
                 }
-                segments.push(classify_bracket(&content, mode));
+                segments.push(classify_bracket(&content));
             }
 
             // Angle bracket: multi-word scoping group.
@@ -314,7 +251,7 @@ fn tokenize(input: &str, mode: Mode) -> Vec<Segment> {
                         }
                     }
                 }
-                let inner_segments = tokenize(&content, mode);
+                let inner_segments = tokenize(&content);
                 let words = process(&inner_segments);
                 if !words.is_empty() {
                     segments.push(Segment::AngleGroup(words));
@@ -402,28 +339,6 @@ fn process(segments: &[Segment]) -> Vec<String> {
             Segment::Drop | Segment::KeepOriginal => {
                 // Silently skip.
             }
-            Segment::Replace(replacement) => {
-                // Replace the most recent Word/AngleGroup.
-                if let Some(pos) = output
-                    .iter()
-                    .rposition(|item| matches!(item, OutputItem::Word(_) | OutputItem::Group(_)))
-                {
-                    output[pos] = OutputItem::Group(replacement.clone());
-                }
-            }
-            Segment::Retracing => {
-                // Consecutive retracings collapse to a single one.
-                while i + 1 < segments.len() && matches!(&segments[i + 1], Segment::Retracing) {
-                    i += 1;
-                }
-                // Remove the most recent Word/AngleGroup.
-                if let Some(pos) = output
-                    .iter()
-                    .rposition(|item| matches!(item, OutputItem::Word(_) | OutputItem::Group(_)))
-                {
-                    output.remove(pos);
-                }
-            }
             Segment::Expand(n) => {
                 // Repeat the most recent Word/AngleGroup n times total.
                 if let Some(item) = output.last().cloned() {
@@ -467,45 +382,6 @@ fn clean_word_boundaries(word: &str) -> &str {
 }
 
 /// Filter and clean individual words (escape words, fillers, etc.).
-fn filter_words(words: Vec<String>) -> Vec<String> {
-    let mut result = Vec::new();
-    for raw in words {
-        let word = clean_word_boundaries(&raw);
-        if word.is_empty() {
-            continue;
-        }
-        // Keep certain prefixed words.
-        if KEEP_PREFIXES.iter().any(|k| word.starts_with(k)) {
-            result.push(word.to_string());
-            continue;
-        }
-        // Filter out omitted words (0-prefixed, e.g., 0you, 0the, 0學).
-        if word.starts_with('0') && word[1..].starts_with(|c: char| c.is_alphabetic()) {
-            continue;
-        }
-        // Filter out escape words, prefixes, and suffixes.
-        if !ESCAPE_WORDS.contains(word)
-            && !ESCAPE_PREFIXES.iter().any(|e| word.starts_with(e))
-            && !ESCAPE_SUFFIXES.iter().any(|e| word.ends_with(e))
-        {
-            // Strip CHAT special form markers (@b, @c, @o, @s:hu, etc.).
-            // The @ and everything after it is metadata, not part of the word.
-            // In CHAT, @ cannot be the first character of a main-tier word.
-            let word = match word.find('@') {
-                Some(pos) => &word[..pos],
-                None => word,
-            };
-            // Strip parentheses (e.g., "(un)til" → "until", "sit(ting)" → "sitting").
-            let word: String = word.chars().filter(|&c| c != '(' && c != ')').collect();
-            if !word.is_empty() {
-                result.push(word);
-            }
-        }
-    }
-    result
-}
-
-/// Split a trailing sentence-final period or question mark from the last word.
 /// Handles cases like `"cookie."` → `["cookie", "."]` and `"what?"` → `["what", "?"]`.
 fn split_trailing_punct(words: &mut Vec<String>) {
     if let Some(last) = words.last()
@@ -522,19 +398,6 @@ fn split_trailing_punct(words: &mut Vec<String>) {
             words.push(punct);
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Clean a CHAT utterance by removing annotations and normalizing text.
-pub(crate) fn clean_utterance(utterance: &str) -> String {
-    let segments = tokenize(utterance, Mode::Clean);
-    let words = process(&segments);
-    let mut words = filter_words(words);
-    split_trailing_punct(&mut words);
-    words.join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -699,7 +562,7 @@ fn filter_words_audible(words: Vec<String>) -> Vec<String> {
 /// `www`) is kept, fragments/fillers are included (with prefix markers
 /// stripped), and `[x N]` repetitions are expanded.
 pub(crate) fn audible_utterance(utterance: &str) -> String {
-    let segments = tokenize(utterance, Mode::Audible);
+    let segments = tokenize(utterance);
     let words = process(&segments);
     let mut words = filter_words_audible(words);
     split_trailing_punct(&mut words);
@@ -709,277 +572,6 @@ pub(crate) fn audible_utterance(utterance: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_empty_string() {
-        assert_eq!(clean_utterance(""), "");
-    }
-
-    #[test]
-    fn test_simple_utterance() {
-        assert_eq!(clean_utterance("I want cookie ."), "I want cookie .");
-    }
-
-    #[test]
-    fn test_drop_explanation() {
-        assert_eq!(
-            clean_utterance("I want [= desire] cookie ."),
-            "I want cookie ."
-        );
-    }
-
-    #[test]
-    fn test_drop_repetition_count() {
-        assert_eq!(clean_utterance("cookie [x 3] ."), "cookie .");
-    }
-
-    #[test]
-    fn test_drop_actions() {
-        assert_eq!(clean_utterance("hello [+ IMP] ."), "hello .");
-    }
-
-    #[test]
-    fn test_drop_error_marker() {
-        assert_eq!(clean_utterance("goed [*] ."), "goed .");
-    }
-
-    #[test]
-    fn test_drop_overlap_markers() {
-        assert_eq!(clean_utterance("hello [<] world ."), "hello world .");
-        assert_eq!(clean_utterance("hello [>] world ."), "hello world .");
-    }
-
-    #[test]
-    fn test_drop_pauses() {
-        assert_eq!(clean_utterance("hello (1.5) world ."), "hello world .");
-    }
-
-    #[test]
-    fn test_timestamp_removal() {
-        let input = "hello \x15123_456\x15 .";
-        assert_eq!(clean_utterance(input), "hello .");
-    }
-
-    #[test]
-    fn test_reformulation_single_word() {
-        assert_eq!(clean_utterance("dog [//] cat ."), "cat .");
-    }
-
-    #[test]
-    fn test_repetition_single_word() {
-        assert_eq!(clean_utterance("the [/] the dog ."), "the dog .");
-    }
-
-    #[test]
-    fn test_reformulation_multi_word() {
-        assert_eq!(clean_utterance("< the dog > [//] the cat ."), "the cat .");
-    }
-
-    #[test]
-    fn test_escape_words_removed() {
-        assert_eq!(clean_utterance("xxx ."), ".");
-        assert_eq!(clean_utterance("yyy ."), ".");
-        assert_eq!(clean_utterance("www ."), ".");
-    }
-
-    #[test]
-    fn test_filler_removed() {
-        // & prefixed words are escape-prefixed
-        assert_eq!(clean_utterance("&um hello ."), "hello .");
-    }
-
-    #[test]
-    fn test_curly_quotes_removed() {
-        assert_eq!(clean_utterance("\u{201c}hello\u{201d} ."), "hello .");
-    }
-
-    #[test]
-    fn test_question_mark_spacing() {
-        assert_eq!(clean_utterance("what ?"), "what ?");
-    }
-
-    #[test]
-    fn test_sentence_final_period_spacing() {
-        assert_eq!(clean_utterance("cookie."), "cookie .");
-    }
-
-    #[test]
-    fn test_correction_keep_original() {
-        // [:: ...] means keep original, drop correction
-        assert_eq!(clean_utterance("goed [:: went] ."), "goed .");
-    }
-
-    #[test]
-    fn test_correction_use_replacement() {
-        // [: ...] means use replacement
-        assert_eq!(clean_utterance("goed [: went] ."), "went .");
-    }
-
-    #[test]
-    fn test_unicode_brackets_removed() {
-        assert_eq!(clean_utterance("\u{2308}hello\u{2309} ."), "hello .");
-    }
-
-    // New test cases --------------------------------------------------------
-
-    #[test]
-    fn test_question_mark_attached_to_word() {
-        // Bug fix: the old regex ate the char before '?'.
-        assert_eq!(clean_utterance("what?"), "what ?");
-    }
-
-    #[test]
-    fn test_nested_reformulations() {
-        // Two consecutive retracings collapse, only the preceding group is dropped.
-        assert_eq!(clean_utterance("< a b > [//] [/] the cat ."), "the cat .");
-    }
-
-    #[test]
-    fn test_multi_word_replacement() {
-        assert_eq!(clean_utterance("goed [: had gone] ."), "had gone .");
-    }
-
-    #[test]
-    fn test_angle_group_replacement() {
-        assert_eq!(clean_utterance("< the dog > [: the cat] ."), "the cat .");
-    }
-
-    #[test]
-    fn test_error_marker_before_retracing() {
-        assert_eq!(clean_utterance("word [*] [//] next ."), "next .");
-    }
-
-    #[test]
-    fn test_multiple_annotations() {
-        assert_eq!(
-            clean_utterance("hello [= greeting] [+ IMP] world ."),
-            "hello world ."
-        );
-    }
-
-    #[test]
-    fn test_uncertain_explanation() {
-        assert_eq!(clean_utterance("word [=? maybe this] ."), "word .");
-    }
-
-    #[test]
-    fn test_paralinguistic() {
-        assert_eq!(clean_utterance("hello [=! laughing] ."), "hello .");
-    }
-
-    #[test]
-    fn test_precode() {
-        assert_eq!(clean_utterance("[- eng] hello ."), "hello .");
-    }
-
-    #[test]
-    fn test_pause_dots_filtered() {
-        assert_eq!(clean_utterance("hello (.) world ."), "hello world .");
-        assert_eq!(clean_utterance("hello (..) world ."), "hello world .");
-        assert_eq!(clean_utterance("hello (...) world ."), "hello world .");
-    }
-
-    #[test]
-    fn test_timed_pause_with_colon() {
-        assert_eq!(clean_utterance("hello (2:30.5) world ."), "hello world .");
-    }
-
-    #[test]
-    fn test_false_start() {
-        // [/-] drops the immediately preceding word only.
-        assert_eq!(
-            clean_utterance("want [/-] I need cookie ."),
-            "I need cookie ."
-        );
-    }
-
-    #[test]
-    fn test_false_start_angle_group() {
-        // Use angle brackets to scope multiple words.
-        assert_eq!(
-            clean_utterance("< I want > [/-] I need cookie ."),
-            "I need cookie ."
-        );
-    }
-
-    #[test]
-    fn test_completion() {
-        assert_eq!(clean_utterance("I [///] she went ."), "she went .");
-    }
-
-    #[test]
-    fn test_omitted_words_filtered() {
-        // 0-prefixed words are omitted words — no %mor entry.
-        assert_eq!(clean_utterance("0you go ."), "go .");
-        assert_eq!(clean_utterance("I 0can go ."), "I go .");
-        assert_eq!(clean_utterance("0the dog ."), "dog .");
-        assert_eq!(
-            clean_utterance("I going 0to do another Bx ."),
-            "I going do another Bx ."
-        );
-        // Non-ASCII 0-prefixed words should also be filtered.
-        assert_eq!(clean_utterance("0學 去 ."), "去 .");
-        assert_eq!(clean_utterance("0你 好 ."), "好 .");
-        // Standalone "0" is also filtered (already covered by ESCAPE_WORDS).
-        assert_eq!(clean_utterance("0 dog ."), "dog .");
-    }
-
-    #[test]
-    fn test_nested_angle_brackets_retracing() {
-        // Outer <...> scopes an inner <word> plus annotation for [//].
-        assert_eq!(
-            clean_utterance("<<how'd> [=? how]> [//] (.) how you hafta do the man ?"),
-            "how you hafta do the man ?"
-        );
-    }
-
-    #[test]
-    fn test_nested_angle_brackets_repetition() {
-        // Outer <...> scopes an inner <words> plus overlap marker for [/].
-        assert_eq!(
-            clean_utterance(
-                "<<I got> [<]> [/] I got ink on my fingers <and> [/] and shoe polish ."
-            ),
-            "I got ink on my fingers and shoe polish ."
-        );
-    }
-
-    #[test]
-    fn test_exclude_single_word() {
-        assert_eq!(
-            clean_utterance("this is a mor [e] exclude ."),
-            "this is a exclude ."
-        );
-    }
-
-    #[test]
-    fn test_exclude_angle_group() {
-        assert_eq!(
-            clean_utterance("this is <a multi-word> [e] exclude ."),
-            "this is exclude ."
-        );
-    }
-
-    #[test]
-    fn test_special_form_markers_stripped() {
-        assert_eq!(clean_utterance("bingbing@c ."), "bingbing .");
-        assert_eq!(clean_utterance("woofwoof@o ."), "woofwoof .");
-        assert_eq!(clean_utterance("istenem@s:hu ."), "istenem .");
-        assert_eq!(clean_utterance("um@fp ."), "um .");
-        assert_eq!(clean_utterance("b@l ."), "b .");
-        assert_eq!(clean_utterance("wug@t ."), "wug .");
-        assert_eq!(
-            clean_utterance("I got a bingbing@c ."),
-            "I got a bingbing ."
-        );
-    }
-
-    #[test]
-    fn test_parentheses_stripped() {
-        assert_eq!(clean_utterance("(un)til the end ."), "until the end .");
-        assert_eq!(clean_utterance("sit(ting) down ."), "sitting down .");
-        assert_eq!(clean_utterance("(be)cause ."), "because .");
-    }
 
     #[test]
     fn test_is_timed_pause() {

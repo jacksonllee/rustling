@@ -425,23 +425,26 @@ mod reader {
         }
 
         /// Convert to a [`Chat`](crate::chat::Chat) object.
+        ///
+        /// Builds the CHAT files directly from the CoNLL-U token data rather
+        /// than round-tripping through CHAT-text parsing, since treebank surface
+        /// text can contain characters the CHAT parser cannot represent.
         fn to_chat_obj(&self) -> crate::chat::Chat {
-            let strs = self.to_chat_strings();
-            let ids: Vec<String> = self
+            let files: Vec<crate::chat::ChatFile> = self
                 .files()
                 .iter()
                 .map(|f| {
                     let path = std::path::Path::new(&f.file_path);
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if uuid::Uuid::try_parse(stem).is_ok() {
+                    let id = if uuid::Uuid::try_parse(stem).is_ok() {
                         f.file_path.clone()
                     } else {
                         format!("{stem}.cha")
-                    }
+                    };
+                    super::chat_writer::conllu_file_to_chat_file(f, id)
                 })
                 .collect();
-            let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None);
-            chat
+            crate::chat::Chat::from_chat_files(files)
         }
 
         /// Write CHAT (.cha) files to a directory.

@@ -197,6 +197,12 @@ jobs:
 
   rust-publish:
     name: Rust - Publish to crates.io
+    # PAUSED: CHAT parsing depends on the git-pinned TalkBank chatter crates
+    # (talkbank-model / talkbank-parser), which crates.io rejects as non-registry
+    # dependencies, so `cargo publish` cannot succeed. Re-enable when chatter is
+    # published to crates.io (planned for its 1.0 release). PyPI wheel publishing
+    # (the primary distribution) is unaffected.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     environment:
       name: crates-io

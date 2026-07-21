@@ -2,11 +2,7 @@
 
 #[cfg(feature = "pyo3")]
 use super::utterance_py::{PyToken, PyUtterance};
-use crate::chat::clean_utterance::clean_utterance;
-use crate::chat::header::{
-    Age, ChangeableHeader, Headers, Participant, parse_changeable, parse_file_headers,
-    split_header_line,
-};
+use crate::chat::header::{Age, Headers, Participant};
 use crate::chat::utterance::{BaseUtterance, Gra, Token, Utterance, Utterances};
 #[cfg(feature = "pyo3")]
 use pyo3::prelude::*;
@@ -14,14 +10,9 @@ use pyo3::prelude::*;
 use fancy_regex::Regex as FancyRegex;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
-use regex::Regex;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::LazyLock;
+use std::collections::{HashSet, VecDeque};
 #[cfg(feature = "pyo3")]
 use std::sync::{Arc, OnceLock};
-
-static TIME_MARKS_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\x15-?(\d+)_(\d+)-?\x15").unwrap());
 
 /// Representation of a single parsed CHAT file.
 ///
@@ -34,6 +25,9 @@ pub struct ChatFile {
     pub events: Vec<Utterance>,
     /// Raw joined lines (headers, utterances, dependent tiers) for serialization.
     pub raw_lines: Vec<String>,
+    /// Semantic validation diagnostics from `chatter` (populated only when the
+    /// file was loaded with `validate=true`, i.e. a `strict=True` file loader).
+    pub(crate) diagnostics: Vec<crate::chat::from_chatter::ChatDiagnostic>,
     /// Lazy cache of Python Utterance objects.
     #[cfg(feature = "pyo3")]
     pub(crate) py_utterances: Arc<OnceLock<Vec<Py<PyUtterance>>>>,
@@ -49,6 +43,7 @@ impl Clone for ChatFile {
             headers: self.headers.clone(),
             events: self.events.clone(),
             raw_lines: self.raw_lines.clone(),
+            diagnostics: self.diagnostics.clone(),
             #[cfg(feature = "pyo3")]
             py_utterances: Arc::new(OnceLock::new()),
             #[cfg(feature = "pyo3")]
@@ -70,6 +65,7 @@ impl ChatFile {
             headers,
             events,
             raw_lines,
+            diagnostics: Vec::new(),
             #[cfg(feature = "pyo3")]
             py_utterances: Arc::new(OnceLock::new()),
             #[cfg(feature = "pyo3")]
@@ -112,26 +108,19 @@ impl ChatFile {
     }
 }
 
-/// A tier group: one utterance line with its dependent tiers.
-struct TierGroup {
-    participant: String,
-    main_tier: String,
-    dependent_tiers: HashMap<String, String>,
-}
-
 /// An intermediate morphology item from %mor parsing.
-struct MorItem {
-    pos: String,
-    mor: String,
-    is_clitic: bool,
+pub(crate) struct MorItem {
+    pub(crate) pos: String,
+    pub(crate) mor: String,
+    pub(crate) is_clitic: bool,
 }
 
 /// Word/mor count mismatch info from `build_tokens`.
-struct MisalignmentCounts {
-    word_count: usize,
-    mor_count: usize,
-    words: Vec<String>,
-    mor_labels: Vec<String>,
+pub(crate) struct MisalignmentCounts {
+    pub(crate) word_count: usize,
+    pub(crate) mor_count: usize,
+    pub(crate) words: Vec<String>,
+    pub(crate) mor_labels: Vec<String>,
 }
 
 /// Full misalignment diagnostic for error/warning reporting.
@@ -218,155 +207,11 @@ fn get_lines(chat_str: &str) -> Vec<String> {
     lines
 }
 
-/// Intermediate result from scanning lines after the file-level headers.
-enum EventOrTierGroup {
-    TierGroup(TierGroup),
-    Header(ChangeableHeader),
-}
-
-/// Scan lines starting from `start_idx`, grouping utterance tiers and
-/// recognizing changeable headers that appear mid-file.
-fn get_all_events(lines: &[String], start_idx: usize) -> Vec<EventOrTierGroup> {
-    let mut results = Vec::new();
-    let mut current: Option<TierGroup> = None;
-
-    for line in &lines[start_idx..] {
-        if line.starts_with('@') {
-            // Changeable header mid-file.
-            let (name, value) = split_header_line(line);
-            if name == "End" {
-                continue;
-            }
-            if let Some(ch) = parse_changeable(name, value) {
-                // Flush any pending tier group before emitting the header.
-                if let Some(group) = current.take() {
-                    results.push(EventOrTierGroup::TierGroup(group));
-                }
-                results.push(EventOrTierGroup::Header(ch));
-            }
-            continue;
-        }
-        if line.starts_with('*') {
-            if let Some(group) = current.take() {
-                results.push(EventOrTierGroup::TierGroup(group));
-            }
-            // Parse *CODE:\t content  or  *CODE: content
-            if let Some(colon_pos) = line.find(':') {
-                let participant = line[1..colon_pos].to_string();
-                let content = line[colon_pos + 1..]
-                    .trim_start_matches('\t')
-                    .trim()
-                    .to_string();
-                current = Some(TierGroup {
-                    participant,
-                    main_tier: content,
-                    dependent_tiers: HashMap::new(),
-                });
-            }
-        } else if line.starts_with('%')
-            && let Some(ref mut group) = current
-            && let Some(colon_pos) = line.find(':')
-        {
-            let tier_name = line[..colon_pos].to_string();
-            let content = line[colon_pos + 1..]
-                .trim_start_matches('\t')
-                .trim()
-                .to_string();
-            group.dependent_tiers.insert(tier_name, content);
-        }
-    }
-    if let Some(group) = current {
-        results.push(EventOrTierGroup::TierGroup(group));
-    }
-    results
-}
-
-/// Split a POS|morphology item at the first pipe.
-fn split_pos_mor(item: &str) -> (String, String) {
-    if let Some(pipe_pos) = item.find('|') {
-        (
-            item[..pipe_pos].to_string(),
-            item[pipe_pos + 1..].to_string(),
-        )
-    } else {
-        // Punctuation items (like ".") have no pipe.
-        (String::new(), item.to_string())
-    }
-}
-
-/// Parse the %mor tier into a list of morphology items.
-///
-/// Handles preclitics (marked with `$`) and postclitics (marked with `~`).
-/// For example: `pro:dem|that~cop|be&3S` produces two items.
-fn parse_mor_tier(mor_str: &str) -> Vec<MorItem> {
-    let mut items = Vec::new();
-
-    for mor_token in mor_str.split_whitespace() {
-        // Split by ~ to get main + postclitics.
-        let tilde_parts: Vec<&str> = mor_token.split('~').collect();
-
-        for (tilde_idx, tilde_part) in tilde_parts.iter().enumerate() {
-            // Split by $ to get preclitics + main.
-            let dollar_parts: Vec<&str> = tilde_part.split('$').collect();
-
-            for (dollar_idx, dollar_part) in dollar_parts.iter().enumerate() {
-                let (pos, mor) = split_pos_mor(dollar_part);
-                let is_clitic = tilde_idx > 0 || dollar_idx < dollar_parts.len() - 1;
-                items.push(MorItem {
-                    pos,
-                    mor,
-                    is_clitic,
-                });
-            }
-        }
-    }
-
-    // Split trailing sentence-final punctuation from the last item.
-    // Handles cases like "n|cookie-PL." where the period is attached
-    // without a preceding space.
-    if let Some(last) = items.last_mut()
-        && !last.pos.is_empty()
-        && last.mor.len() > 1
-    {
-        let final_byte = last.mor.as_bytes()[last.mor.len() - 1];
-        if matches!(final_byte, b'.' | b'?' | b'!') {
-            let punct = last.mor[last.mor.len() - 1..].to_string();
-            last.mor.truncate(last.mor.len() - 1);
-            items.push(MorItem {
-                pos: String::new(),
-                mor: punct,
-                is_clitic: false,
-            });
-        }
-    }
-
-    items
-}
-
-/// Parse the %gra tier into a list of grammatical relations.
-fn parse_gra_tier(gra_str: &str) -> Vec<Gra> {
-    gra_str
-        .split_whitespace()
-        .filter_map(|item| {
-            let parts: Vec<&str> = item.split('|').collect();
-            if parts.len() >= 3 {
-                Some(Gra {
-                    dep: parts[0].parse().unwrap_or(0),
-                    head: parts[1].parse().unwrap_or(0),
-                    rel: parts[2].to_string(),
-                })
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 /// Build tokens by aligning words with morphology and grammar data.
 ///
 /// Returns `(tokens, misalignment)`. On misalignment, tokens is empty and
 /// the caller should use `MisalignmentCounts` for diagnostics.
-fn build_tokens(
+pub(crate) fn build_tokens(
     words: &[&str],
     mor_items: Option<&[MorItem]>,
     gra_items: Option<&[Gra]>,
@@ -456,152 +301,44 @@ fn build_tokens(
 ///
 /// Only mid-file changeable headers are included in the returned events;
 /// file-level headers are stored in the `Headers` struct.
+///
+/// CHAT parsing is delegated to the official TalkBank `chatter` crates via
+/// [`crate::chat::from_chatter`]. `raw_lines` (the trimmed, continuation-joined
+/// source) is retained for verbatim serialization; the same text (wrapped in a
+/// minimal envelope when it is a bare fragment) is what `chatter` parses.
+///
+/// `validate` requests chatter's semantic validation (used for `strict=True`);
+/// the resulting diagnostics are returned as the fifth tuple element.
 #[allow(unused_variables)]
 fn parse_chat_str(
     chat_str: &str,
     parallel: bool,
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
-) -> (Headers, Vec<Utterance>, Vec<String>, Vec<MisalignmentInfo>) {
-    let lines = get_lines(chat_str);
-    let (headers, start_idx, _initial_events) = parse_file_headers(&lines);
-    let event_or_groups = get_all_events(&lines, start_idx);
-
-    // Separate tier groups (need building) from headers (pass through).
-    let tier_groups: Vec<&TierGroup> = event_or_groups
-        .iter()
-        .filter_map(|e| match e {
-            EventOrTierGroup::TierGroup(tg) => Some(tg),
-            EventOrTierGroup::Header(_) => None,
-        })
-        .collect();
-
-    #[cfg(feature = "parallel")]
-    let results: Vec<(Utterance, Option<MisalignmentInfo>)> = if parallel {
-        tier_groups
-            .par_iter()
-            .with_min_len(16)
-            .map(|tg| build_utterance(tg, mor_tier, gra_tier))
-            .collect()
-    } else {
-        tier_groups
-            .iter()
-            .map(|tg| build_utterance(tg, mor_tier, gra_tier))
-            .collect()
+    validate: bool,
+) -> (
+    Headers,
+    Vec<Utterance>,
+    Vec<String>,
+    Vec<MisalignmentInfo>,
+    Vec<crate::chat::from_chatter::ChatDiagnostic>,
+) {
+    // Mor and gra handling is all-or-nothing: if either tier name is disabled,
+    // both are (mirrors the `tier_keys` behavior at the Python boundary).
+    let (mor_tier, gra_tier) = match (mor_tier, gra_tier) {
+        (Some(m), Some(g)) => (Some(m), Some(g)),
+        _ => (None, None),
     };
-
-    #[cfg(not(feature = "parallel"))]
-    let results: Vec<(Utterance, Option<MisalignmentInfo>)> = tier_groups
-        .iter()
-        .map(|tg| build_utterance(tg, mor_tier, gra_tier))
-        .collect();
-
-    // Split results into utterances and misalignment info.
-    let mut utterances = Vec::with_capacity(results.len());
-    let mut misalignments = Vec::new();
-    for (utt, mis) in results {
-        utterances.push(utt);
-        if let Some(m) = mis {
-            misalignments.push(m);
-        }
-    }
-
-    // Reassemble in order: mid-file interleaved utterances and changeable headers.
-    let mut events: Vec<Utterance> = Vec::new();
-    let mut utt_iter = utterances.into_iter();
-    for eg in event_or_groups {
-        match eg {
-            EventOrTierGroup::TierGroup(_) => {
-                events.push(utt_iter.next().unwrap());
-            }
-            EventOrTierGroup::Header(h) => {
-                events.push(Utterance {
-                    participant: None,
-                    tokens: None,
-                    time_marks: None,
-                    tiers: None,
-                    changeable_header: Some(h),
-                    mor_tier_name: None,
-                    gra_tier_name: None,
-                });
-            }
-        }
-    }
-
-    (headers, events, lines, misalignments)
-}
-
-/// Build an Utterance from a TierGroup.
-///
-/// `mor_tier` and `gra_tier` are the `%`-prefixed tier names to use for
-/// morphology and grammatical relations (e.g., `Some("%mor")`, `Some("%xmor")`).
-/// If either is `None`, all mor+gra parsing is disabled.
-///
-/// Returns `(utterance, misalignment)`. `misalignment` is `Some` when
-/// the word count doesn't match the non-clitic mor item count.
-fn build_utterance(
-    group: &TierGroup,
-    mor_tier: Option<&str>,
-    gra_tier: Option<&str>,
-) -> (Utterance, Option<MisalignmentInfo>) {
-    // Extract time marks.
-    let time_marks = TIME_MARKS_REGEX
-        .captures(&group.main_tier)
-        .and_then(|caps| {
-            let start: i64 = caps.get(1)?.as_str().parse().ok()?;
-            let end: i64 = caps.get(2)?.as_str().parse().ok()?;
-            Some((start, end))
-        });
-
-    // Clean the utterance text.
-    let cleaned = clean_utterance(&group.main_tier);
-    let words: Vec<&str> = cleaned.split_whitespace().collect();
-
-    // If either tier is None, disable both mor+gra parsing.
-    let (mor_items, gra_items) = if let (Some(mt), Some(gt)) = (mor_tier, gra_tier) {
-        (
-            group.dependent_tiers.get(mt).map(|s| parse_mor_tier(s)),
-            group.dependent_tiers.get(gt).map(|s| parse_gra_tier(s)),
-        )
-    } else {
-        (None, None)
-    };
-
-    // Build tokens.
-    let (tokens, misalignment_counts) =
-        build_tokens(&words, mor_items.as_deref(), gra_items.as_deref());
-
-    // Build misalignment info if detected.
-    let misalignment = misalignment_counts.map(|counts| MisalignmentInfo {
-        file_path: String::new(), // Populated later by the caller.
-        participant: group.participant.clone(),
-        main_tier: group.main_tier.clone(),
-        mor_tier_name: mor_tier.unwrap_or("%mor").to_string(),
-        mor_tier_content: mor_tier
-            .and_then(|mt| group.dependent_tiers.get(mt))
-            .cloned()
-            .unwrap_or_default(),
-        word_count: counts.word_count,
-        mor_count: counts.mor_count,
-        words: counts.words,
-        mor_labels: counts.mor_labels,
-    });
-
-    // Build tiers map.
-    let mut tiers = group.dependent_tiers.clone();
-    tiers.insert(group.participant.clone(), group.main_tier.clone());
-
+    let raw_lines = get_lines(chat_str);
+    let file_text = raw_lines.join("\n");
+    let adapted =
+        crate::chat::from_chatter::parse_with_chatter(&file_text, mor_tier, gra_tier, validate);
     (
-        Utterance {
-            participant: Some(group.participant.clone()),
-            tokens: Some(tokens),
-            time_marks,
-            tiers: Some(tiers),
-            changeable_header: None,
-            mor_tier_name: mor_tier.map(|s| s.to_string()),
-            gra_tier_name: gra_tier.map(|s| s.to_string()),
-        },
-        misalignment,
+        adapted.headers,
+        adapted.events,
+        raw_lines,
+        adapted.misalignments,
+        adapted.diagnostics,
     )
 }
 
@@ -665,17 +402,20 @@ pub(crate) fn parse_chat_strs(
     parallel: bool,
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
+    validate: bool,
 ) -> (Vec<ChatFile>, Vec<MisalignmentInfo>) {
     let build = |content: &str, id: &str| {
-        let (headers, events, raw_lines, mut mis) =
-            parse_chat_str(content, parallel, mor_tier, gra_tier);
+        let (headers, events, raw_lines, mut mis, mut diags) =
+            parse_chat_str(content, parallel, mor_tier, gra_tier, validate);
         for m in &mut mis {
             m.file_path = id.to_string();
         }
-        (
-            ChatFile::new(id.to_string(), headers, events, raw_lines),
-            mis,
-        )
+        for d in &mut diags {
+            d.file_path = id.to_string();
+        }
+        let mut file = ChatFile::new(id.to_string(), headers, events, raw_lines);
+        file.diagnostics = diags;
+        (file, mis)
     };
 
     #[cfg(feature = "parallel")]
@@ -705,18 +445,21 @@ pub(crate) fn load_chat_files(
     parallel: bool,
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
+    validate: bool,
 ) -> Result<(Vec<ChatFile>, Vec<MisalignmentInfo>), std::io::Error> {
     let build = |path: &str| -> Result<(ChatFile, Vec<MisalignmentInfo>), std::io::Error> {
         let content = std::fs::read_to_string(path)?;
-        let (headers, events, raw_lines, mut mis) =
-            parse_chat_str(&content, parallel, mor_tier, gra_tier);
+        let (headers, events, raw_lines, mut mis, mut diags) =
+            parse_chat_str(&content, parallel, mor_tier, gra_tier, validate);
         for m in &mut mis {
             m.file_path = path.to_string();
         }
-        Ok((
-            ChatFile::new(path.to_string(), headers, events, raw_lines),
-            mis,
-        ))
+        for d in &mut diags {
+            d.file_path = path.to_string();
+        }
+        let mut file = ChatFile::new(path.to_string(), headers, events, raw_lines);
+        file.diagnostics = diags;
+        Ok((file, mis))
     };
 
     #[cfg(feature = "parallel")]
@@ -1532,6 +1275,7 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> (Self, Vec<MisalignmentInfo>) {
         let ids = ids.unwrap_or_else(|| {
             strs.iter()
@@ -1546,7 +1290,7 @@ impl Chat {
             ids.len()
         );
         let pairs: Vec<(String, String)> = strs.into_iter().zip(ids).collect();
-        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier);
+        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier, validate);
         (Self::from_chat_files(files), misalignments)
     }
 
@@ -1558,8 +1302,10 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> Result<(Self, Vec<MisalignmentInfo>), std::io::Error> {
-        let (files, misalignments) = load_chat_files(paths, parallel, mor_tier, gra_tier)?;
+        let (files, misalignments) =
+            load_chat_files(paths, parallel, mor_tier, gra_tier, validate)?;
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1574,6 +1320,7 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let mut paths: Vec<String> = Vec::new();
         for entry in walkdir::WalkDir::new(path)
@@ -1591,7 +1338,8 @@ impl Chat {
 
         let filtered = filter_file_paths(&paths, match_pattern)
             .map_err(|e| ChatError::InvalidPattern(e.to_string()))?;
-        let (files, misalignments) = load_chat_files(&filtered, parallel, mor_tier, gra_tier)?;
+        let (files, misalignments) =
+            load_chat_files(&filtered, parallel, mor_tier, gra_tier, validate)?;
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1606,6 +1354,7 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let file = std::fs::File::open(path)?;
         let mut archive = zip::ZipArchive::new(file)
@@ -1638,7 +1387,7 @@ impl Chat {
             pairs.push((content, name.clone()));
         }
 
-        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier);
+        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier, validate);
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1658,6 +1407,7 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let local_path = crate::sources::resolve_git(url, rev, depth, cache_dir, force_download)?;
         let path = local_path.to_string_lossy();
@@ -1668,6 +1418,7 @@ impl Chat {
             parallel,
             mor_tier,
             gra_tier,
+            validate,
         )
     }
 
@@ -1685,6 +1436,7 @@ impl Chat {
         parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
+        validate: bool,
     ) -> Result<(Self, Vec<MisalignmentInfo>), ChatError> {
         let (local_path, is_zip) = crate::sources::resolve_url(url, cache_dir, force_download)?;
         let path = local_path.to_string_lossy();
@@ -1696,6 +1448,7 @@ impl Chat {
                 parallel,
                 mor_tier,
                 gra_tier,
+                validate,
             )
         } else {
             let content = std::fs::read_to_string(local_path)?;
@@ -1705,6 +1458,7 @@ impl Chat {
                 parallel,
                 mor_tier,
                 gra_tier,
+                validate,
             ))
         }
     }
@@ -1714,6 +1468,21 @@ impl Chat {
 mod tests {
     use super::*;
     use crate::chat::utterance::Utterances;
+    use std::collections::HashMap;
+
+    /// Test shim: the internal `parse_chat_str` gained a `validate` flag and a
+    /// diagnostics return value; these legacy tests use the 4-arg / 4-tuple
+    /// form. Shadow it with `validate = false` (validation is exercised via the
+    /// Python `strict=True` tests instead).
+    fn parse_chat_str(
+        chat_str: &str,
+        parallel: bool,
+        mor_tier: Option<&str>,
+        gra_tier: Option<&str>,
+    ) -> (Headers, Vec<Utterance>, Vec<String>, Vec<MisalignmentInfo>) {
+        let (h, e, l, m, _) = super::parse_chat_str(chat_str, parallel, mor_tier, gra_tier, false);
+        (h, e, l, m)
+    }
 
     fn make_basic_chat() -> &'static str {
         "@UTF8\n@Begin\n@Participants:\tCHI Child, MOT Mother\n*CHI:\tI want cookie .\n%mor:\tpro|I v|want n|cookie .\n%gra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n*MOT:\tno .\n%mor:\tco|no .\n%gra:\t1|0|ROOT 2|1|PUNCT\n@End\n"
@@ -1765,132 +1534,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_all_events_extracts_tiers() {
-        let lines = get_lines(make_basic_chat());
-        let (_, start_idx, _) = parse_file_headers(&lines);
-        let events = get_all_events(&lines, start_idx);
-        let tier_groups: Vec<&TierGroup> = events
-            .iter()
-            .filter_map(|e| match e {
-                EventOrTierGroup::TierGroup(tg) => Some(tg),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(tier_groups.len(), 2);
-        assert_eq!(tier_groups[0].participant, "CHI");
-        assert_eq!(tier_groups[1].participant, "MOT");
-    }
-
-    #[test]
-    fn test_parse_mor_tier_basic() {
-        let items = parse_mor_tier("pro|I v|want n|cookie .");
-        assert_eq!(items.len(), 4);
-        assert_eq!(items[0].pos, "pro");
-        assert_eq!(items[0].mor, "I");
-        assert_eq!(items[1].pos, "v");
-        assert_eq!(items[1].mor, "want");
-        assert_eq!(items[3].pos, "");
-        assert_eq!(items[3].mor, ".");
-    }
-
-    #[test]
-    fn test_parse_mor_tier_postclitic() {
-        // "that's" -> pro:dem|that~cop|be&3S
-        let items = parse_mor_tier("pro:dem|that~cop|be&3S adj|good .");
-        assert_eq!(items.len(), 4); // that, be&3S(clitic), good, .
-        assert_eq!(items[0].pos, "pro:dem");
-        assert!(!items[0].is_clitic);
-        assert_eq!(items[1].pos, "cop");
-        assert!(items[1].is_clitic);
-        assert_eq!(items[2].pos, "adj");
-        assert!(!items[2].is_clitic);
-    }
-
-    #[test]
-    fn test_parse_mor_tier_preclitic() {
-        // "won't" -> aux|will$neg|not
-        let items = parse_mor_tier("aux|will$neg|not");
-        assert_eq!(items.len(), 2);
-        assert!(items[0].is_clitic); // preclitic
-        assert!(!items[1].is_clitic); // main
-    }
-
-    #[test]
-    fn test_parse_mor_tier_preclitic_and_postclitic() {
-        // "da~me~lo" -> v|da-give$pro|me&dat-me~pro|lo&acc-it
-        let items = parse_mor_tier("v|da-give$pro|me&dat-me~pro|lo&acc-it");
-        assert_eq!(items.len(), 3);
-        assert!(items[0].is_clitic); // v|da-give (preclitic)
-        assert!(!items[1].is_clitic); // pro|me&dat-me (main)
-        assert!(items[2].is_clitic); // pro|lo&acc-it (postclitic)
-    }
-
-    #[test]
-    fn test_parse_mor_tier_attached_period() {
-        let items = parse_mor_tier("pro:sub|she v|say&PAST pro:sub|I v|want n|cookie-PL.");
-        assert_eq!(items.len(), 6);
-        assert_eq!(items[4].pos, "n");
-        assert_eq!(items[4].mor, "cookie-PL");
-        assert!(!items[4].is_clitic);
-        assert_eq!(items[5].pos, "");
-        assert_eq!(items[5].mor, ".");
-        assert!(!items[5].is_clitic);
-    }
-
-    #[test]
-    fn test_parse_mor_tier_attached_question_mark() {
-        let items = parse_mor_tier("pro|what v|be&3S n|that?");
-        assert_eq!(items.len(), 4);
-        assert_eq!(items[2].pos, "n");
-        assert_eq!(items[2].mor, "that");
-        assert_eq!(items[3].pos, "");
-        assert_eq!(items[3].mor, "?");
-    }
-
-    #[test]
-    fn test_parse_mor_tier_attached_exclamation() {
-        let items = parse_mor_tier("co|yes!");
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].pos, "co");
-        assert_eq!(items[0].mor, "yes");
-        assert_eq!(items[1].pos, "");
-        assert_eq!(items[1].mor, "!");
-    }
-
-    #[test]
-    fn test_parse_mor_tier_standalone_punct_unchanged() {
-        let items = parse_mor_tier("pro|I v|want n|cookie .");
-        assert_eq!(items.len(), 4);
-        assert_eq!(items[2].pos, "n");
-        assert_eq!(items[2].mor, "cookie");
-        assert_eq!(items[3].pos, "");
-        assert_eq!(items[3].mor, ".");
-    }
-
-    #[test]
-    fn test_parse_mor_tier_postclitic_attached_period() {
-        let items = parse_mor_tier("pro:dem|that~cop|be&3S.");
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0].pos, "pro:dem");
-        assert!(!items[0].is_clitic);
-        assert_eq!(items[1].pos, "cop");
-        assert_eq!(items[1].mor, "be&3S");
-        assert!(items[1].is_clitic);
-        assert_eq!(items[2].pos, "");
-        assert_eq!(items[2].mor, ".");
-        assert!(!items[2].is_clitic);
-    }
-
-    #[test]
-    fn test_parse_gra_tier() {
-        let items = parse_gra_tier("1|2|SUBJ 2|0|ROOT 3|2|OBJ");
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0].dep, 1);
-        assert_eq!(items[0].head, 2);
-        assert_eq!(items[0].rel, "SUBJ");
-    }
-
-    #[test]
     fn test_parse_chat_str_basic() {
         let (_, events, _, _) = parse_chat_str(make_basic_chat(), true, DEFAULT_MOR, DEFAULT_GRA);
         let utterances: Vec<&Utterance> = events
@@ -1909,10 +1552,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_chat_str_attached_mor_period() {
+    fn test_parse_chat_str_quotation_and_fusional_mor() {
+        // Words inside a quotation are extracted, and a fused `&`-feature mor
+        // (`say&PAST`) round-trips. (chatter requires a space before the
+        // terminator on the %mor tier, unlike the legacy lenient parser.)
         let input = "@UTF8\n@Begin\n@Participants:\tCHI Child\n\
                      *CHI:\tshe said \u{201c}I want cookies\u{201d} .\n\
-                     %mor:\tpro:sub|she v|say&PAST pro:sub|I v|want n|cookie-PL.\n\
+                     %mor:\tpro:sub|she v|say&PAST pro:sub|I v|want n|cookie-PL .\n\
                      @End\n";
         let (_, events, _, misalignments) = parse_chat_str(input, false, DEFAULT_MOR, DEFAULT_GRA);
         assert!(misalignments.is_empty());
@@ -1963,7 +1609,28 @@ mod tests {
         // "that's good ." -> words: ["that's", "good", "."]
         // mor: pro:dem|that~cop|be&3S adj|good .
         // items: [that(non-clitic), be&3S(clitic), good(non-clitic), .(non-clitic)]
-        let mor_items = parse_mor_tier("pro:dem|that~cop|be&3S adj|good .");
+        let mor_items = vec![
+            MorItem {
+                pos: "pro:dem".into(),
+                mor: "that".into(),
+                is_clitic: false,
+            },
+            MorItem {
+                pos: "cop".into(),
+                mor: "be&3S".into(),
+                is_clitic: true,
+            },
+            MorItem {
+                pos: "adj".into(),
+                mor: "good".into(),
+                is_clitic: false,
+            },
+            MorItem {
+                pos: String::new(),
+                mor: ".".into(),
+                is_clitic: false,
+            },
+        ];
         let words = vec!["that's", "good", "."];
         let (tokens, misalignment) = build_tokens(&words, Some(&mor_items), None);
         assert!(misalignment.is_none());
@@ -1979,7 +1646,23 @@ mod tests {
     #[test]
     fn test_build_tokens_misalignment_returns_empty() {
         // mor: pro|I, v|want, . → 3 non-clitic items vs 4 words → misalignment
-        let mor_items = parse_mor_tier("pro|I v|want .");
+        let mor_items = vec![
+            MorItem {
+                pos: "pro".into(),
+                mor: "I".into(),
+                is_clitic: false,
+            },
+            MorItem {
+                pos: "v".into(),
+                mor: "want".into(),
+                is_clitic: false,
+            },
+            MorItem {
+                pos: String::new(),
+                mor: ".".into(),
+                is_clitic: false,
+            },
+        ];
         let words = vec!["I", "want", "cookie", "."];
         let (tokens, misalignment) = build_tokens(&words, Some(&mor_items), None);
         assert!(tokens.is_empty());
@@ -2247,6 +1930,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         );
         let utts: Vec<Utterance> = original
             .files
@@ -2535,6 +2219,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         );
         assert!(misalignments.is_empty());
         assert_eq!(chat.num_files(), 1);
@@ -2557,6 +2242,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         );
         assert_eq!(chat.num_files(), 2);
         // Auto-generated UUIDs should be unique.
@@ -2573,6 +2259,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         );
     }
 
@@ -2587,6 +2274,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         )
         .unwrap();
         assert!(misalignments.is_empty());
@@ -2613,6 +2301,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         )
         .unwrap();
         assert_eq!(chat.num_files(), 2);
@@ -2631,6 +2320,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         )
         .unwrap();
         assert_eq!(chat.num_files(), 1);
@@ -2658,6 +2348,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         )
         .unwrap();
         assert_eq!(chat.num_files(), 2);
@@ -2683,6 +2374,7 @@ mod tests {
             false,
             DEFAULT_MOR,
             DEFAULT_GRA,
+            false,
         )
         .unwrap();
         assert_eq!(chat.num_files(), 1);
@@ -2770,6 +2462,7 @@ mod tests {
             true,
             Some("%xmor"),
             Some("%xgra"),
+            false,
         );
         assert!(misalignments.is_empty());
         let files = chat.files();
@@ -2781,8 +2474,14 @@ mod tests {
 
     #[test]
     fn test_disabled_tiers_from_strs() {
-        let (chat, _) =
-            Chat::from_strs(vec![make_basic_chat().to_string()], None, true, None, None);
+        let (chat, _) = Chat::from_strs(
+            vec![make_basic_chat().to_string()],
+            None,
+            true,
+            None,
+            None,
+            false,
+        );
         let files = chat.files();
         let utt = files[0].utterances().next().unwrap();
         let tokens = utt.tokens.as_ref().unwrap();

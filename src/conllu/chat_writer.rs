@@ -1,6 +1,56 @@
 //! Convert CoNLL-U data to CHAT format.
 
-use super::reader::ConlluFile;
+use std::collections::HashMap;
+
+use super::reader::{ConlluFile, Sentence};
+use crate::chat::{ChatFile, Headers, Participant, Token, Utterance};
+
+/// The surface words, `%mor` text, and `%gra` text of one CoNLL-U sentence.
+///
+/// The surface text uses multiword-token forms (skipping their component
+/// words); `%mor`/`%gra` are built from the non-multiword, non-empty-node
+/// component tokens (`UPOS|LEMMA[&FEATS]` and `ID|HEAD|DEPREL`).
+fn sentence_parts(sentence: &Sentence) -> (Vec<String>, String, String) {
+    let mut words: Vec<String> = Vec::new();
+    let mut skip_until: Option<usize> = None;
+    for token in &sentence.tokens {
+        if token.is_empty_node() {
+            continue;
+        }
+        if let Some(end) = skip_until
+            && let Ok(id_num) = token.id.parse::<usize>()
+        {
+            if id_num <= end {
+                continue;
+            }
+            skip_until = None;
+        }
+        if token.is_multiword()
+            && let Some(dash_pos) = token.id.find('-')
+            && let Ok(end) = token.id[dash_pos + 1..].parse::<usize>()
+        {
+            skip_until = Some(end);
+        }
+        words.push(token.form.clone());
+    }
+
+    let mut mor_parts: Vec<String> = Vec::new();
+    let mut gra_parts: Vec<String> = Vec::new();
+    for token in &sentence.tokens {
+        if token.is_multiword() || token.is_empty_node() {
+            continue;
+        }
+        let mor = if token.feats != "_" && !token.feats.is_empty() {
+            format!("{}|{}&{}", token.upos, token.lemma, token.feats)
+        } else {
+            format!("{}|{}", token.upos, token.lemma)
+        };
+        mor_parts.push(mor);
+        gra_parts.push(format!("{}|{}|{}", token.id, token.head, token.deprel));
+    }
+
+    (words, mor_parts.join(" "), gra_parts.join(" "))
+}
 
 /// Convert a single [`ConlluFile`] to a CHAT format string.
 ///
@@ -18,66 +68,77 @@ pub(crate) fn conllu_file_to_chat_str(file: &ConlluFile) -> String {
     output.push_str("@Participants:\tSPK Speaker\n");
 
     for sentence in &file.sentences {
-        // Build utterance text from FORM fields.
-        // Use multiword tokens for surface form when available, skip their
-        // component words in the surface text.
-        let mut text_parts: Vec<&str> = Vec::new();
-        let mut skip_until: Option<usize> = None;
-        for token in &sentence.tokens {
-            if token.is_empty_node() {
-                continue;
-            }
-            if let Some(end) = skip_until
-                && let Ok(id_num) = token.id.parse::<usize>()
-            {
-                if id_num <= end {
-                    continue;
-                }
-                skip_until = None;
-            }
-            if token.is_multiword() {
-                // Parse range end (e.g., "2-3" -> 3).
-                if let Some(dash_pos) = token.id.find('-')
-                    && let Ok(end) = token.id[dash_pos + 1..].parse::<usize>()
-                {
-                    skip_until = Some(end);
-                }
-            }
-            text_parts.push(&token.form);
+        let (words, mor, gra) = sentence_parts(sentence);
+        output.push_str(&format!("*SPK:\t{}\n", words.join(" ")));
+        if !mor.is_empty() {
+            output.push_str(&format!("%mor:\t{mor}\n"));
         }
-        let text = text_parts.join(" ");
-        output.push_str(&format!("*SPK:\t{text}\n"));
-
-        // Build %mor tier from non-multiword, non-empty-node tokens.
-        let mut mor_parts: Vec<String> = Vec::new();
-        let mut gra_parts: Vec<String> = Vec::new();
-        for token in &sentence.tokens {
-            if token.is_multiword() || token.is_empty_node() {
-                continue;
-            }
-            // %mor: UPOS|LEMMA or UPOS|LEMMA&FEATS
-            let mor = if token.feats != "_" && !token.feats.is_empty() {
-                format!("{}|{}&{}", token.upos, token.lemma, token.feats)
-            } else {
-                format!("{}|{}", token.upos, token.lemma)
-            };
-            mor_parts.push(mor);
-
-            // %gra: ID|HEAD|DEPREL
-            let gra = format!("{}|{}|{}", token.id, token.head, token.deprel);
-            gra_parts.push(gra);
-        }
-
-        if !mor_parts.is_empty() {
-            output.push_str(&format!("%mor:\t{}\n", mor_parts.join(" ")));
-        }
-        if !gra_parts.is_empty() {
-            output.push_str(&format!("%gra:\t{}\n", gra_parts.join(" ")));
+        if !gra.is_empty() {
+            output.push_str(&format!("%gra:\t{gra}\n"));
         }
     }
 
     output.push_str("@End\n");
     output
+}
+
+/// Convert a single [`ConlluFile`] directly into a rustling [`ChatFile`].
+///
+/// The events are built from the CoNLL-U token data directly (bypassing a
+/// CHAT-text round-trip through the parser). This avoids re-parsing arbitrary
+/// treebank surface text — which may contain CHAT-special characters (`[`, `<`,
+/// `&`, …) that the parser cannot represent — while still producing the same
+/// word-only utterances the string round-trip did (mor/gra are kept as raw tier
+/// text, matching the `mor_tier=None` behavior of the CHAT conversion path).
+pub(crate) fn conllu_file_to_chat_file(file: &ConlluFile, id: String) -> ChatFile {
+    let raw = conllu_file_to_chat_str(file);
+    let raw_lines: Vec<String> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(String::from)
+        .collect();
+
+    let headers = Headers {
+        participants: vec![Participant {
+            code: "SPK".to_string(),
+            role: "Speaker".to_string(),
+            ..Participant::default()
+        }],
+        ..Headers::default()
+    };
+
+    let mut events = Vec::with_capacity(file.sentences.len());
+    for sentence in &file.sentences {
+        let (words, mor, gra) = sentence_parts(sentence);
+        let tokens: Vec<Token> = words
+            .iter()
+            .map(|w| Token {
+                word: w.clone(),
+                pos: None,
+                mor: None,
+                gra: None,
+            })
+            .collect();
+        let mut tiers = HashMap::new();
+        tiers.insert("SPK".to_string(), words.join(" "));
+        if !mor.is_empty() {
+            tiers.insert("%mor".to_string(), mor);
+        }
+        if !gra.is_empty() {
+            tiers.insert("%gra".to_string(), gra);
+        }
+        events.push(Utterance {
+            participant: Some("SPK".to_string()),
+            tokens: Some(tokens),
+            time_marks: None,
+            tiers: Some(tiers),
+            changeable_header: None,
+            mor_tier_name: None,
+            gra_tier_name: None,
+        });
+    }
+
+    ChatFile::new(id, headers, events, raw_lines)
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +273,8 @@ mod tests {
         };
         let chat_str = conllu_file_to_chat_str(&file);
 
-        let (chat, _) = crate::chat::Chat::from_strs(vec![chat_str], None, false, None, None);
+        let (chat, _) =
+            crate::chat::Chat::from_strs(vec![chat_str], None, false, None, None, false);
         let files = chat.files();
         assert_eq!(files.len(), 1);
         let utts: Vec<_> = files[0].real_utterances().collect();

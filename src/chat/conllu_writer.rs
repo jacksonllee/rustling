@@ -96,6 +96,7 @@ mod tests {
             false,
             Some("%mor"),
             Some("%gra"),
+            false,
         );
         let conllu = chat_file_to_conllu_str(&chat.files()[0]);
 
@@ -118,6 +119,7 @@ mod tests {
             false,
             Some("%mor"),
             Some("%gra"),
+            false,
         );
         let conllu = chat_file_to_conllu_str(&chat.files()[0]);
 
@@ -128,7 +130,7 @@ mod tests {
     #[test]
     fn test_no_mor_gra() {
         let chat_str = "@UTF8\n@Begin\n@Participants:\tSPK Speaker\n*SPK:\tHello world .\n@End\n";
-        let (chat, _) = Chat::from_strs(vec![chat_str.to_string()], None, false, None, None);
+        let (chat, _) = Chat::from_strs(vec![chat_str.to_string()], None, false, None, None, false);
         let conllu = chat_file_to_conllu_str(&chat.files()[0]);
 
         assert!(conllu.contains("# sent_id = 1"));
@@ -139,7 +141,7 @@ mod tests {
     #[test]
     fn test_empty_file() {
         let chat_str = "@UTF8\n@Begin\n@Participants:\tSPK Speaker\n@End\n";
-        let (chat, _) = Chat::from_strs(vec![chat_str.to_string()], None, false, None, None);
+        let (chat, _) = Chat::from_strs(vec![chat_str.to_string()], None, false, None, None, false);
         let conllu = chat_file_to_conllu_str(&chat.files()[0]);
 
         assert!(conllu.is_empty() || !conllu.contains("# sent_id"));

@@ -396,8 +396,14 @@ mod tests {
         let chat_str = elan_file_to_chat_str(&file, None);
 
         // Parse the generated CHAT string.
-        let (chat, _) =
-            crate::chat::Chat::from_strs(vec![chat_str], None, false, Some("%mor"), Some("%gra"));
+        let (chat, _) = crate::chat::Chat::from_strs(
+            vec![chat_str],
+            None,
+            false,
+            Some("%mor"),
+            Some("%gra"),
+            false,
+        );
         let files = chat.files();
         assert_eq!(files.len(), 1);
 
