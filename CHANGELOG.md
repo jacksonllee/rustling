@@ -13,20 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.3.6`); consequently rustling's own
-  publishing to crates.io is paused until `chatter` 1.0 reaches crates.io. PyPI
-  wheel distribution is unaffected.
+  pinned as a git dependency (tag `v0.3.6`).
+  Since crates.io doesn't allow git dependencies, this branch using `chatter`
+  won't be merged in the Rustling's `main` branch for release yet --
+  we need to wait for `chatter`'s crates to be available on crates.io.
 - CHAT validation now follows the official CLAN-CHECK-parity rules from
   `chatter`, so `strict=True` file loading flags more issues than before and
   error messages differ. `CHAT.from_strs` remains lenient (no file-level
   validation), matching prior behavior for bare-fragment input.
-- The `[x N]` repetition annotation, which TalkBank has abandoned (transcripts
-  should spell out repetitions explicitly), is no longer parsed: `strict=True`
-  rejects files containing it, and under lenient parsing the marker degrades
-  the utterance's word tokens (its content can surface as word tokens and drop
-  the rest of the utterance). `Utterance.annotated` preserves the raw main
-  tier, and `Utterance.audible` still expands `[x N]` (e.g., `play [x 3]` →
-  `play play play`) for legacy transcripts.
+- The `[x N]` repetition marker is not yet implemented by `chatter`'s grammar,
+  so `strict=True` rejects files containing it and lenient parsing degrades the
+  affected utterance's word tokens (the marker's content can surface as word
+  tokens and drop the rest of the utterance). No data is lost otherwise:
+  `Utterance.annotated` preserves the raw main tier, and `Utterance.audible`
+  still expands `[x N]` (e.g., `play [x 3]` → `play play play`), so legacy
+  transcripts loaded with `strict=False` still yield the expanded form.
 
 ### Known limitations
 
