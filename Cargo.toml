@@ -7,10 +7,15 @@ license = "MIT"
 repository = "https://github.com/jacksonllee/rustling"
 documentation = "https://docs.rs/rustling"
 readme = "README.md"
-# crates.io publishing is paused while CHAT parsing depends on the git-pinned
-# TalkBank chatter crates (talkbank-model / talkbank-parser), which crates.io
-# rejects as non-registry dependencies. Re-enable when chatter 1.0 ships to
-# crates.io. PyPI/maturin distribution is unaffected by git dependencies.
+# Releases are on hold while CHAT parsing depends on the git-pinned TalkBank
+# chatter crates (talkbank-model / talkbank-parser): crates.io rejects git
+# dependencies outright, and we hold PyPI releases too so the two registries
+# stay in lockstep. This branch is therefore not merged into main or released;
+# it demonstrates the chatter integration until chatter ships to crates.io
+# (planned for its 1.0 release), at which point the git deps become version
+# deps, this line is removed, and the publish jobs are re-enabled. `publish =
+# false` guards against an accidental `cargo publish`; it does not affect
+# maturin/PyPI wheel building, which git dependencies do not block.
 publish = false
 keywords = [
     # At most 5 keywords per crate. Each keyword must have fewer than 20 characters.

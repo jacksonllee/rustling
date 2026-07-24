@@ -159,6 +159,12 @@ jobs:
 
   python-publish:
     name: Python - Publish to PyPI
+    # PAUSED: while CHAT parsing depends on the git-pinned TalkBank chatter
+    # crates, releases are held across both registries so crates.io and PyPI
+    # stay in lockstep (git deps do not technically block wheel building, but we
+    # do not want a PyPI-only release ahead of crates.io). Re-enable together
+    # with rust-publish when chatter is published to crates.io.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     needs: [python-sdist, python-wheels]
     environment:
@@ -199,9 +205,9 @@ jobs:
     name: Rust - Publish to crates.io
     # PAUSED: CHAT parsing depends on the git-pinned TalkBank chatter crates
     # (talkbank-model / talkbank-parser), which crates.io rejects as non-registry
-    # dependencies, so `cargo publish` cannot succeed. Re-enable when chatter is
-    # published to crates.io (planned for its 1.0 release). PyPI wheel publishing
-    # (the primary distribution) is unaffected.
+    # dependencies, so `cargo publish` cannot succeed. Held together with
+    # python-publish so both registries stay in lockstep. Re-enable both when
+    # chatter is published to crates.io (planned for its 1.0 release).
     if: ${{ false }}
     runs-on: ubuntu-latest
     environment:
