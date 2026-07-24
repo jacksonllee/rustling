@@ -634,9 +634,8 @@ class TestFromDir:
         CHAT parsing/validation is delegated to the official TalkBank ``chatter``
         crates. The exceptions below are the testchat/bad files that ``chatter``
         v0.3.6 does not yet flag as errors (context-dependent checks such as
-        cross-tier consistency and retrace context). This list is expected to
-        shrink as ``chatter`` matures; v0.3.6 already caught three files that
-        v0.3.2 missed (CA segment repetition and letter form markers).
+        cross-tier consistency and retrace context). This list will likely shrink
+        as ``chatter`` matures.
         """
         known_exceptions = {
             # Cross-tier (%mor) context checks:

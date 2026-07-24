@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   affected utterance's word tokens (the marker's content can surface as word
   tokens and drop the rest of the utterance). No data is lost otherwise:
   `Utterance.annotated` preserves the raw main tier, and `Utterance.audible`
-  still expands `[x N]` (e.g., `play [x 3]` → `play play play`), so legacy
+  still expands `[x N]` (e.g., `play [x 3]` -> `play play play`), so legacy
   transcripts loaded with `strict=False` still yield the expanded form.
 
 ## [0.9.0] - 2026-07-20
