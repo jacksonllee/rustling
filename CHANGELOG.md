@@ -29,13 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still expands `[x N]` (e.g., `play [x 3]` → `play play play`), so legacy
   transcripts loaded with `strict=False` still yield the expanded form.
 
-### Known limitations
-
-- `chatter` v0.3.6 does not yet implement a few context-dependent checks
-  (cross-tier consistency, retrace context, and similar; see the known
-  exceptions in `test_testchat_bad_files_catch_errors` for the exact list).
-  These are expected to be addressed as `chatter` matures toward 1.0.
-
 ## [0.9.0] - 2026-07-20
 
 ### Added
