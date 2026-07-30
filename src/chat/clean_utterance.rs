@@ -18,12 +18,11 @@ enum Segment {
     Word(String),
     /// An angle-bracketed group `<word1 word2>` (used for multi-word scoping).
     AngleGroup(Vec<String>),
-    /// Any annotation bracket that should be silently dropped.
+    /// Any annotation bracket that should be silently dropped, keeping whatever
+    /// preceded it (this covers replacements such as `[: …]` and `[:: …]`,
+    /// where the audible view keeps the original word).
     Drop,
-    /// `[:: …]` (and `[: …]` in audible mode) — keep the preceding
-    /// Word/AngleGroup, discard this bracket.
-    KeepOriginal,
-    /// `[x N]` — repeat the preceding Word/AngleGroup N times total.
+    /// `[x N]` -- repeat the preceding Word/AngleGroup N times total.
     Expand(usize),
 }
 
@@ -69,11 +68,11 @@ fn should_start_angle_group(chars: &[char], pos: usize, word_buf: &str) -> bool 
 /// Classify the text between `[` and `]` into a [`Segment`].
 ///
 /// Retracings become no-ops (preceding material is kept), replacements keep the
-/// original word, and `[x N]` expands repetitions — the audibly faithful view.
+/// original word, and `[x N]` expands repetitions -- the audibly faithful view.
 fn classify_bracket(content: &str) -> Segment {
     // Standalone codes (exact match after trimming).
     match content.trim() {
-        // Retracings keep the preceding material — just drop the bracket.
+        // Retracings keep the preceding material -- just drop the bracket.
         "/" | "//" | "///" | "/?" | "/-" | "e" => return Segment::Drop,
         "?" | "!" | "!!" | "^c" | "*" => return Segment::Drop,
         _ => {}
@@ -89,15 +88,10 @@ fn classify_bracket(content: &str) -> Segment {
         return Segment::Drop;
     }
 
-    // Replacement brackets (order matters: check `::` before `:`).
-    if let Some(rest) = content.strip_prefix(":: ") {
-        // [:: replacement] — keep original, drop this.
-        let _ = rest; // content is unused; we just keep the preceding element.
-        return Segment::KeepOriginal;
-    }
-    if content.strip_prefix(": ").is_some() {
-        // Keep the original word, discard the replacement (audible view).
-        return Segment::KeepOriginal;
+    // Replacement brackets: `[: …]` and `[:: …]` keep the original word and
+    // discard the replacement, which is just dropping the bracket.
+    if content.starts_with(":: ") || content.starts_with(": ") {
+        return Segment::Drop;
     }
 
     // Drop patterns: [= …], [+ …], [* …], [% …], [- …], [^ …], [# …],
@@ -116,12 +110,12 @@ fn classify_bracket(content: &str) -> Segment {
         return Segment::Drop;
     }
 
-    // [x N] — repetition count.
+    // [x N] -- repetition count.
     if let Some(rest) = content.strip_prefix("x ") {
         if let Ok(n) = rest.trim().parse::<usize>() {
             return Segment::Expand(n);
         }
-        // Unparseable — fall through to drop.
+        // Unparseable -- fall through to drop.
         return Segment::Drop;
     }
 
@@ -336,8 +330,8 @@ fn process(segments: &[Segment]) -> Vec<String> {
             Segment::AngleGroup(words) => {
                 output.push(OutputItem::Group(words.clone()));
             }
-            Segment::Drop | Segment::KeepOriginal => {
-                // Silently skip.
+            Segment::Drop => {
+                // Silently skip, keeping whatever preceded the bracket.
             }
             Segment::Expand(n) => {
                 // Repeat the most recent Word/AngleGroup n times total.
@@ -381,8 +375,10 @@ fn clean_word_boundaries(word: &str) -> &str {
     w
 }
 
-/// Filter and clean individual words (escape words, fillers, etc.).
-/// Handles cases like `"cookie."` → `["cookie", "."]` and `"what?"` → `["what", "?"]`.
+/// Split a trailing sentence-final punctuation mark off the last word.
+///
+/// Handles cases like `"cookie."` -> `["cookie", "."]` and `"what?"` ->
+/// `["what", "?"]`.
 fn split_trailing_punct(words: &mut Vec<String>) {
     if let Some(last) = words.last()
         && last.len() > 1
@@ -404,9 +400,10 @@ fn split_trailing_punct(words: &mut Vec<String>) {
 // Audible utterance — keeps what was actually spoken
 // ---------------------------------------------------------------------------
 
-/// Escape words that are still dropped in audible mode.
-/// Compared to [`ESCAPE_WORDS`], this keeps `xxx`, `yyy`, `www` and their
-/// suffixed variants (audible unidentifiable material).
+/// Escape words that are dropped even in the audible view.
+///
+/// Unidentifiable material (`xxx`, `yyy`, `www` and their suffixed variants) is
+/// deliberately absent: it was audible, so it is kept.
 static AUDIBLE_ESCAPE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "0", "++", "+<", "+^", "(.)", "(..)", "(...)", ":", ";", ";;", "<", ">", "xx", "yy",
@@ -464,11 +461,10 @@ fn clean_disfluency(word: &str) -> String {
 
 /// Filter and clean individual words for audible output.
 ///
-/// Compared to [`filter_words`], this keeps unidentifiable material (`xxx`,
-/// `yyy`, `www`), converts fragments/fillers (`&-uh` → `uh`), keeps simple
-/// events (`&=laughs`) but drops action-only ones (`&=imit:baby`), and
-/// removes parenthesized content (the inaudible part) rather than the
-/// parentheses alone.
+/// Keeps unidentifiable material (`xxx`, `yyy`, `www`), converts
+/// fragments/fillers (`&-uh` -> `uh`), keeps simple events (`&=laughs`) but
+/// drops action-only ones (`&=imit:baby`), and removes parenthesized content
+/// (the inaudible part) rather than the parentheses alone.
 fn filter_words_audible(words: Vec<String>) -> Vec<String> {
     let mut result = Vec::new();
     for raw in words {
@@ -557,10 +553,10 @@ fn filter_words_audible(words: Vec<String>) -> Vec<String> {
 
 /// Produce an audibly faithful transcription of a CHAT utterance.
 ///
-/// Unlike [`clean_utterance`], this preserves what was actually spoken:
-/// repeated/retraced material is kept, unidentifiable material (`xxx`, `yyy`,
-/// `www`) is kept, fragments/fillers are included (with prefix markers
-/// stripped), and `[x N]` repetitions are expanded.
+/// This preserves what was actually spoken: repeated/retraced material is kept,
+/// unidentifiable material (`xxx`, `yyy`, `www`) is kept, fragments/fillers are
+/// included (with prefix markers stripped), and `[x N]` repetitions are
+/// expanded.
 pub(crate) fn audible_utterance(utterance: &str) -> String {
     let segments = tokenize(utterance);
     let words = process(&segments);

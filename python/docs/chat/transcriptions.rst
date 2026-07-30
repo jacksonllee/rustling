@@ -365,6 +365,15 @@ Clitics
 In CHAT, clitics are morphemes that attach to a host word but carry their own
 part-of-speech and morphological information on the ``%mor`` tier.
 Postclitics are marked with ``~`` and preclitics with ``$``.
+
+.. note::
+
+   Preclitics (``$``) are not currently supported.
+   The underlying TalkBank ``chatter`` parser does not model them, so a
+   ``%mor`` tier containing ``$`` fails to parse and the affected utterance
+   is reported as a mor/word misalignment (its tokens carry no ``pos`` or
+   ``mor``).  Postclitics (``~``) are unaffected.
+
 For example, the contraction *that's* is annotated as
 ``pro:dem|that~cop|be&3S`` -- the demonstrative pronoun *that* followed by
 the postclitic copula *be*.

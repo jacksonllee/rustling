@@ -200,7 +200,9 @@ fn handle_diagnostics(chat: &Chat, strict: bool) -> PyResult<()> {
     }
     for file in chat.files() {
         for d in &file.diagnostics {
-            if !d.is_error || d.code.contains("CountMismatch") {
+            // `%mor`/word mismatches are reported through `handle_misalignments`
+            // instead; every other error still raises here.
+            if !d.is_error || d.is_mor_word_mismatch {
                 continue;
             }
             return Err(pyo3::exceptions::PyValueError::new_err(format!(

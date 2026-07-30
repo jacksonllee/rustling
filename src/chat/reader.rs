@@ -188,23 +188,32 @@ impl From<std::io::Error> for ChatError {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Join continuation lines and return all lines.
-fn get_lines(chat_str: &str) -> Vec<String> {
-    let mut lines = Vec::new();
+/// Normalize a CHAT source: trim each line, drop blanks, and fold continuation
+/// lines into the tier line they belong to.
+///
+/// A leading byte-order mark is stripped first: U+FEFF is not whitespace, so it
+/// would otherwise keep the opening `@UTF8` from being recognized as a header
+/// and drop the line entirely.
+fn normalized_text(chat_str: &str) -> String {
+    let chat_str = chat_str.strip_prefix('\u{feff}').unwrap_or(chat_str);
+    let mut out = String::with_capacity(chat_str.len());
     for raw_line in chat_str.lines() {
         let line = raw_line.trim();
         if line.is_empty() {
             continue;
         }
         if line.starts_with('*') || line.starts_with('%') || line.starts_with('@') {
-            lines.push(line.to_string());
-        } else if let Some(last) = lines.last_mut() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(line);
+        } else if !out.is_empty() {
             // Continuation line: append to previous line.
-            last.push(' ');
-            last.push_str(line.trim());
+            out.push(' ');
+            out.push_str(line);
         }
     }
-    lines
+    out
 }
 
 /// Build tokens by aligning words with morphology and grammar data.
@@ -212,7 +221,7 @@ fn get_lines(chat_str: &str) -> Vec<String> {
 /// Returns `(tokens, misalignment)`. On misalignment, tokens is empty and
 /// the caller should use `MisalignmentCounts` for diagnostics.
 pub(crate) fn build_tokens(
-    words: &[&str],
+    words: Vec<String>,
     mor_items: Option<&[MorItem]>,
     gra_items: Option<&[Gra]>,
 ) -> (Vec<Token>, Option<MisalignmentCounts>) {
@@ -224,9 +233,9 @@ pub(crate) fn build_tokens(
         // No mor data: return tokens with words only.
         return (
             words
-                .iter()
-                .map(|w| Token {
-                    word: w.to_string(),
+                .into_iter()
+                .map(|word| Token {
+                    word,
                     pos: None,
                     mor: None,
                     gra: None,
@@ -236,12 +245,11 @@ pub(crate) fn build_tokens(
         );
     };
 
-    // Count non-clitic mor items — should equal word count.
+    // Count non-clitic mor items -- should equal word count.
     let non_clitic_count = mor_items.iter().filter(|m| !m.is_clitic).count();
 
     if non_clitic_count != words.len() {
         // Misalignment: return empty tokens with diagnostic info.
-        let word_list = words.iter().map(|w| w.to_string()).collect();
         let mor_list = mor_items
             .iter()
             .filter(|m| !m.is_clitic)
@@ -252,47 +260,28 @@ pub(crate) fn build_tokens(
             Some(MisalignmentCounts {
                 word_count: words.len(),
                 mor_count: non_clitic_count,
-                words: word_list,
+                words,
                 mor_labels: mor_list,
             }),
         );
     }
 
-    let mut tokens = Vec::new();
-    let mut mor_idx = 0;
-    let mut word_idx = 0;
-
-    while mor_idx < mor_items.len() {
-        let item = &mor_items[mor_idx];
-
-        if item.is_clitic {
-            // Clitic: empty word, but has pos/mor/gra.
-            let gra = gra_items.and_then(|g| g.get(mor_idx)).cloned();
-            tokens.push(Token {
-                word: String::new(),
-                pos: Some(item.pos.clone()),
-                mor: Some(item.mor.clone()),
-                gra,
-            });
-        } else {
-            // Regular word.
-            let word = if word_idx < words.len() {
-                words[word_idx]
+    // Each non-clitic item consumes the next word; clitics carry an empty word.
+    let mut words = words.into_iter();
+    let tokens = mor_items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| Token {
+            word: if item.is_clitic {
+                String::new()
             } else {
-                ""
-            };
-            let gra = gra_items.and_then(|g| g.get(mor_idx)).cloned();
-            tokens.push(Token {
-                word: word.to_string(),
-                pos: Some(item.pos.clone()),
-                mor: Some(item.mor.clone()),
-                gra,
-            });
-            word_idx += 1;
-        }
-
-        mor_idx += 1;
-    }
+                words.next().unwrap_or_default()
+            },
+            pos: Some(item.pos.clone()),
+            mor: Some(item.mor.clone()),
+            gra: gra_items.and_then(|g| g.get(idx)).cloned(),
+        })
+        .collect();
 
     (tokens, None)
 }
@@ -309,13 +298,14 @@ pub(crate) fn build_tokens(
 ///
 /// `validate` requests chatter's semantic validation (used for `strict=True`);
 /// the resulting diagnostics are returned as the fifth tuple element.
-#[allow(unused_variables)]
+/// `may_be_fragment` is set for the string APIs, which accept bare utterance
+/// bodies; file input is never treated as a fragment.
 fn parse_chat_str(
     chat_str: &str,
-    parallel: bool,
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
     validate: bool,
+    may_be_fragment: bool,
 ) -> (
     Headers,
     Vec<Utterance>,
@@ -329,10 +319,17 @@ fn parse_chat_str(
         (Some(m), Some(g)) => (Some(m), Some(g)),
         _ => (None, None),
     };
-    let raw_lines = get_lines(chat_str);
-    let file_text = raw_lines.join("\n");
-    let adapted =
-        crate::chat::from_chatter::parse_with_chatter(&file_text, mor_tier, gra_tier, validate);
+    // The normalized text is built once and `raw_lines` is derived from it, so
+    // the transcript body is copied once rather than per line and again to join.
+    let file_text = normalized_text(chat_str);
+    let raw_lines = file_text.lines().map(str::to_string).collect();
+    let adapted = crate::chat::from_chatter::parse_with_chatter(
+        &file_text,
+        mor_tier,
+        gra_tier,
+        validate,
+        may_be_fragment,
+    );
     (
         adapted.headers,
         adapted.events,
@@ -405,8 +402,9 @@ pub(crate) fn parse_chat_strs(
     validate: bool,
 ) -> (Vec<ChatFile>, Vec<MisalignmentInfo>) {
     let build = |content: &str, id: &str| {
+        // String input may be a bare utterance fragment, so allow the envelope.
         let (headers, events, raw_lines, mut mis, mut diags) =
-            parse_chat_str(content, parallel, mor_tier, gra_tier, validate);
+            parse_chat_str(content, mor_tier, gra_tier, validate, true);
         for m in &mut mis {
             m.file_path = id.to_string();
         }
@@ -449,8 +447,10 @@ pub(crate) fn load_chat_files(
 ) -> Result<(Vec<ChatFile>, Vec<MisalignmentInfo>), std::io::Error> {
     let build = |path: &str| -> Result<(ChatFile, Vec<MisalignmentInfo>), std::io::Error> {
         let content = std::fs::read_to_string(path)?;
+        // A file is a whole transcript: never wrap, so a missing `@UTF8` or
+        // `@Begin` is reported as itself rather than as a duplicated envelope.
         let (headers, events, raw_lines, mut mis, mut diags) =
-            parse_chat_str(&content, parallel, mor_tier, gra_tier, validate);
+            parse_chat_str(&content, mor_tier, gra_tier, validate, false);
         for m in &mut mis {
             m.file_path = path.to_string();
         }
@@ -1470,18 +1470,27 @@ mod tests {
     use crate::chat::utterance::Utterances;
     use std::collections::HashMap;
 
-    /// Test shim: the internal `parse_chat_str` gained a `validate` flag and a
-    /// diagnostics return value; these legacy tests use the 4-arg / 4-tuple
-    /// form. Shadow it with `validate = false` (validation is exercised via the
-    /// Python `strict=True` tests instead).
+    /// Test shim: the internal `parse_chat_str` gained a `validate` flag, a
+    /// `may_be_fragment` flag and a diagnostics return value, and dropped the
+    /// unused `parallel` flag; these legacy tests use the 4-arg / 4-tuple form.
+    /// Shadow it with `validate = false` (validation is exercised via the
+    /// Python `strict=True` tests instead) and fragment wrapping enabled, which
+    /// is how the string APIs call it.
     fn parse_chat_str(
         chat_str: &str,
-        parallel: bool,
+        _parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
     ) -> (Headers, Vec<Utterance>, Vec<String>, Vec<MisalignmentInfo>) {
-        let (h, e, l, m, _) = super::parse_chat_str(chat_str, parallel, mor_tier, gra_tier, false);
+        let (h, e, l, m, _) = super::parse_chat_str(chat_str, mor_tier, gra_tier, false, true);
         (h, e, l, m)
+    }
+
+    fn get_lines(chat_str: &str) -> Vec<String> {
+        normalized_text(chat_str)
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 
     fn make_basic_chat() -> &'static str {
@@ -1631,8 +1640,8 @@ mod tests {
                 is_clitic: false,
             },
         ];
-        let words = vec!["that's", "good", "."];
-        let (tokens, misalignment) = build_tokens(&words, Some(&mor_items), None);
+        let words = ["that's", "good", "."].map(String::from).to_vec();
+        let (tokens, misalignment) = build_tokens(words, Some(&mor_items), None);
         assert!(misalignment.is_none());
         // non-clitic count = 3, words = 3, so alignment should work
         assert_eq!(tokens.len(), 4); // 3 words + 1 clitic
@@ -1663,8 +1672,8 @@ mod tests {
                 is_clitic: false,
             },
         ];
-        let words = vec!["I", "want", "cookie", "."];
-        let (tokens, misalignment) = build_tokens(&words, Some(&mor_items), None);
+        let words = ["I", "want", "cookie", "."].map(String::from).to_vec();
+        let (tokens, misalignment) = build_tokens(words, Some(&mor_items), None);
         assert!(tokens.is_empty());
         assert!(misalignment.is_some());
         let counts = misalignment.unwrap();
@@ -1674,8 +1683,8 @@ mod tests {
 
     #[test]
     fn test_build_tokens_no_mor() {
-        let words = vec!["hello", "world", "."];
-        let (tokens, misalignment) = build_tokens(&words, None, None);
+        let words = ["hello", "world", "."].map(String::from).to_vec();
+        let (tokens, misalignment) = build_tokens(words, None, None);
         assert!(misalignment.is_none());
         assert_eq!(tokens.len(), 3);
         assert_eq!(tokens[0].word, "hello");

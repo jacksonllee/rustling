@@ -311,8 +311,9 @@ class CHAT:
             strs: CHAT-formatted strings to parse.
             ids: Optional identifiers for each string. If None, UUIDs
                 are generated.
-            parallel: If True, use parallel processing. Set to False
-                to disable multithreading.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file. Set to
+                False to disable multithreading.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
@@ -346,8 +347,9 @@ class CHAT:
 
         Args:
             paths: Paths to CHAT files.
-            parallel: If True, use parallel processing. Set to False
-                to disable multithreading.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file. Set to
+                False to disable multithreading.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
@@ -385,8 +387,9 @@ class CHAT:
             path: Directory path to search.
             match: Regex pattern to include only matching file paths.
             extension: File extension to filter by (default: ".cha").
-            parallel: If True, use parallel processing. Set to False
-                to disable multithreading.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file. Set to
+                False to disable multithreading.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
@@ -424,8 +427,9 @@ class CHAT:
             path: Path to the ZIP file.
             match: Regex pattern to include only matching file paths.
             extension: File extension to filter by (default: ".cha").
-            parallel: If True, use parallel processing. Set to False
-                to disable multithreading.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file. Set to
+                False to disable multithreading.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
@@ -477,7 +481,8 @@ class CHAT:
             cache_dir: Directory for caching cloned repositories.
                 Defaults to ``~/.rustling/cache/``.
             force_download: If True, re-clone even if a cached copy exists.
-            parallel: If True, use parallel processing.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.
@@ -520,7 +525,8 @@ class CHAT:
                 Defaults to ``~/.rustling/cache/``.
             force_download: If True, re-download even if a cached
                 copy exists.
-            parallel: If True, use parallel processing.
+            parallel: If True, parse files in parallel (one thread per
+                file). Has no effect when there is only one file.
             strict: If True (default), raise ValueError on mor/word
                 misalignment. If False, emit a warning and set tokens
                 to an empty list for affected utterances.

@@ -13,14 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.3.6`).
+  pinned as a git dependency (tag `v0.4.1`).
   Since crates.io doesn't allow git dependencies, this branch using `chatter`
   won't be merged in the Rustling's `main` branch for release yet --
   we need to wait for `chatter`'s crates to be available on crates.io.
 - CHAT validation now follows the official CLAN-CHECK-parity rules from
   `chatter`, so `strict=True` file loading flags more issues than before and
-  error messages differ. `CHAT.from_strs` remains lenient (no file-level
-  validation), matching prior behavior for bare-fragment input.
+  error messages differ.
+- `CHAT.from_strs` no longer performs file-level validation, even with
+  `strict=True`; it reports mor/word misalignment only. This is a change from
+  0.9.0, where string input was validated by rustling's own rules. `chatter`'s
+  validation is whole-file (it requires a complete preamble with `@Languages`
+  and `@ID`), which the bare utterance fragments `from_strs` is designed to
+  accept can never satisfy. Use `CHAT.from_files` / `CHAT.from_dir` with
+  `strict=True` to validate complete transcripts.
+- Word-to-`%mor` alignment now follows `chatter`'s own alignment rules, so the
+  words rustling counts are exactly the words `chatter` expects a `%mor` item
+  for. This affects utterances containing `[e]`-excluded material, phonological
+  or sign groups (`‹…›`), and CA separators such as `;` and `:`.
+- `Participant.language` keeps every code declared in a multi-language `@ID`
+  field (e.g. `"yue,eng"`) instead of only the first.
+
+### Known limitations
+
+- Preclitics (`$` on the `%mor` tier, e.g. `v|da-give$pro|me&dat-me`) are not
+  supported: `chatter` does not model them, so such a `%mor` tier fails to
+  parse and the utterance is reported as a mor/word misalignment with no
+  `pos`/`mor` on its tokens. Postclitics (`~`) are unaffected.
+- Some checks the previous hand-written validator performed have no `chatter`
+  equivalent yet, so `strict=True` no longer flags them: `@Media` name vs.
+  file name mismatches, tone terminators, pauses written inside a word,
+  invalid language codes, and zero-word forms. Validation is stricter overall
+  (see above), but these specific checks were lost.
 - The `[x N]` repetition marker is not yet implemented by `chatter`'s grammar,
   so `strict=True` rejects files containing it and lenient parsing degrades the
   affected utterance's word tokens (the marker's content can surface as word

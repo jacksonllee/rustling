@@ -14,18 +14,27 @@ use crate::chat::reader::{MisalignmentCounts, MisalignmentInfo, MorItem, build_t
 use crate::chat::utterance::{Gra, Utterance};
 
 use talkbank_model::{
-    AgeValue, BracketedItem, ChatFile as TbChatFile, DependentTier, ErrorCollector, GraTier,
-    Header, Line, MorTier, MorWord, ParseError, Separator, Severity, UtteranceContent, Word,
-    WriteChat,
+    AgeValue, ChatFile as TbChatFile, DependentTier, ErrorCode, ErrorCollector, GraTier, Header,
+    Line, MorTier, MorWord, ParseError, ReplacedWord, Separator, Severity, TierDomain,
+    UtteranceContent, Word, WriteChat,
+};
+// chatter's canonical alignment policy: the same traversal and word-inclusion
+// rules its own `%mor` validation uses, so rustling's counts cannot drift.
+use talkbank_model::alignment::helpers::{
+    WordItem, annotations_have_alignment_ignore, counts_for_tier, is_tag_marker_separator,
+    walk_words,
 };
 
 // ---------------------------------------------------------------------------
 // Parser backend (target-gated)
 // ---------------------------------------------------------------------------
 //
-// `TreeSitterParser` (native) and `Re2cParser` (wasm) expose different APIs and
-// only the latter implements the `ChatParser` trait, so the backend is a
-// cfg-selected trio of free functions rather than a shared trait object.
+// Both parsers implement chatter's `ChatParser` trait (as of chatter v0.4.0),
+// but the backend still has to be cfg-selected rather than generic: the two
+// parser crates are themselves target-gated in `Cargo.toml`, so
+// `TreeSitterParser` cannot even be named in a wasm build. Native additionally
+// keeps its parser in a `thread_local` because it is `!Send + !Sync`, whereas
+// the re2c parser is constructed per call.
 
 #[cfg(not(target_family = "wasm"))]
 mod backend {
@@ -99,6 +108,9 @@ pub(crate) struct ChatDiagnostic {
     pub(crate) code: String,
     /// Whether the diagnostic is an error (vs a warning).
     pub(crate) is_error: bool,
+    /// Whether this is the `%mor`/word count mismatch that rustling reports
+    /// through its own misalignment channel (and so must not raise twice).
+    pub(crate) is_mor_word_mismatch: bool,
     /// Human-readable message from chatter.
     pub(crate) message: String,
     /// Source file path (filled by the caller; empty from the adapter).
@@ -120,6 +132,10 @@ pub(crate) struct Adapted {
 ///   to disable mor+gra handling.
 /// * When `validate` is true, chatter's semantic validation + alignment checks
 ///   run and their diagnostics are returned (used only for `strict=True`).
+/// * `may_be_fragment` marks input from the string APIs, where a bare utterance
+///   body is accepted and needs a synthetic header envelope to parse. Input
+///   loaded from files is never wrapped, so a genuinely missing
+///   `@UTF8`/`@Begin` header is reported as itself.
 ///
 /// Misalignment detection (word count vs non-clitic mor count) is always
 /// performed and returned via `misalignments`, independent of `validate`.
@@ -128,8 +144,10 @@ pub(crate) fn parse_with_chatter(
     mor_key: Option<&str>,
     gra_key: Option<&str>,
     validate: bool,
+    may_be_fragment: bool,
 ) -> Adapted {
-    let wrapped = maybe_wrap(file_text);
+    let wrapped =
+        (may_be_fragment && !looks_like_transcript(file_text)).then(|| wrap_fragment(file_text));
     let input: &str = wrapped.as_deref().unwrap_or(file_text);
 
     let parse_errors = ErrorCollector::new();
@@ -156,19 +174,27 @@ pub(crate) fn parse_with_chatter(
 
 /// Wrap a bare CHAT fragment in a minimal `@UTF8`/`@Begin`/`@End` envelope.
 ///
-/// chatter's tree-sitter parser only recognises utterances inside a proper
-/// transcript body, so fragments (common in `CHAT.from_strs`) must be wrapped.
-/// Full files (starting with `@UTF8`) are parsed as-is. The wrapped text is
-/// only fed to the parser; rustling keeps the original `raw_lines`.
-fn maybe_wrap(file_text: &str) -> Option<String> {
-    if file_text.trim_start().starts_with("@UTF8") {
-        None
-    } else {
-        Some(format!(
-            "@UTF8\n@Begin\n{}\n@End\n",
-            file_text.trim_end_matches('\n')
-        ))
-    }
+/// chatter's parser only recognises utterances inside a proper transcript body,
+/// so fragments (bare utterance lines, as accepted by `CHAT.from_strs`) must be
+/// wrapped. Whole transcripts are never wrapped: sniffing their content instead
+/// would hide a genuinely missing `@UTF8`/`@Begin` header behind a synthetic one
+/// and report the duplicated envelope rather than the real defect. The wrapped
+/// text is only fed to the parser; rustling keeps the original `raw_lines`.
+fn wrap_fragment(file_text: &str) -> String {
+    format!(
+        "@UTF8\n@Begin\n{}\n@End\n",
+        file_text.trim_end_matches('\n')
+    )
+}
+
+/// Whether the text already carries a transcript envelope.
+///
+/// Such input must not be wrapped even when fragments are allowed: doing so
+/// would nest one envelope inside another and turn every structural complaint
+/// into a duplicate-`@Begin` report about lines the caller never wrote.
+fn looks_like_transcript(file_text: &str) -> bool {
+    let start = file_text.trim_start();
+    start.starts_with("@UTF8") || start.starts_with("@Begin")
 }
 
 fn collect_diagnostics(errors: &[ParseError], out: &mut Vec<ChatDiagnostic>) {
@@ -176,6 +202,14 @@ fn collect_diagnostics(errors: &[ParseError], out: &mut Vec<ChatDiagnostic>) {
         out.push(ChatDiagnostic {
             code: format!("{:?}", e.code),
             is_error: matches!(e.severity, Severity::Error),
+            // Match the two `%mor`-vs-word codes exactly. chatter has a dozen
+            // other `*CountMismatch*` codes (`%gra`, `%pho`, `%sin`, `%mod`,
+            // ...) that rustling has no separate channel for, so those must
+            // still surface as errors under `strict=True`.
+            is_mor_word_mismatch: matches!(
+                e.code,
+                ErrorCode::MorCountMismatchTooFew | ErrorCode::MorCountMismatchTooMany
+            ),
             message: e.message.clone(),
             file_path: String::new(),
         });
@@ -258,32 +292,35 @@ fn map_utterance(
     let main_text = tier_content(slice(input, u.main.span));
     tiers.insert(participant.clone(), main_text.clone());
     for dt in u.dependent_tiers.iter() {
-        if let Some((name, content)) = tier_name_and_content(slice(input, dt.span())) {
+        if let Some((name, content)) = tier_name_and_content(slice(input, dt.tier.span())) {
             tiers.insert(name, content);
         }
     }
 
+    // chatter models only the utterance-final media bullet; transcripts also
+    // carry mid-utterance bullets, so fall back to scanning the raw tier text
+    // for the first `\x15start_end\x15` marker (the legacy behavior).
     let time_marks = u
         .main
         .content
         .bullet
         .as_ref()
-        .map(|b| (b.timing.start_ms as i64, b.timing.end_ms as i64));
+        .map(|b| (b.timing.start_ms as i64, b.timing.end_ms as i64))
+        .or_else(|| first_time_mark(&main_text));
 
     // Words from the main tier + a trailing terminator token (matches legacy).
     let mut words: Vec<String> = Vec::new();
-    collect_words_uc(&u.main.content.content, &mut words);
+    collect_words(&u.main.content.content, &mut words);
     if let Some(term) = &u.main.content.terminator {
         words.push(term.to_string());
     }
 
     // Morphology / grammatical-relation items (from the selected tiers).
     let frag_errors = ErrorCollector::new();
-    let mor_items = find_mor_tier(u, mor_key, &frag_errors).map(|tier| mor_items_from_tier(&tier));
-    let gra_items = find_gra_tier(u, gra_key, &frag_errors).map(|tier| gra_items_from_tier(&tier));
+    let mor_items = find_mor_items(u, mor_key, &frag_errors);
+    let gra_items = find_gra_items(u, gra_key, &frag_errors);
 
-    let word_refs: Vec<&str> = words.iter().map(String::as_str).collect();
-    let (tokens, counts) = build_tokens(&word_refs, mor_items.as_deref(), gra_items.as_deref());
+    let (tokens, counts) = build_tokens(words, mor_items.as_deref(), gra_items.as_deref());
 
     let misalignment = counts.map(|c: MisalignmentCounts| MisalignmentInfo {
         file_path: String::new(),
@@ -314,47 +351,49 @@ fn map_utterance(
     )
 }
 
-/// Find the morphology tier selected by `mor_key`, parsing custom `%x…` tiers.
-fn find_mor_tier(
+/// Find the dependent tier named `key` (e.g. `"%mor"`).
+///
+/// `dependent_tiers` holds `DependentTierEntry` (tier + separator provenance)
+/// as of chatter v0.4.0, so the tier is reached through `.tier`. chatter's
+/// `kind()` is the bare name (`mor`), so the `%` prefix is stripped from the
+/// key rather than formatted onto every tier name.
+fn find_tier<'a>(u: &'a talkbank_model::Utterance, key: Option<&str>) -> Option<&'a DependentTier> {
+    let name = key?.strip_prefix('%')?;
+    u.dependent_tiers
+        .iter()
+        .map(|entry| &entry.tier)
+        .find(|tier| tier.kind() == name)
+}
+
+/// Morphology items for the tier selected by `mor_key`, parsing custom `%x…`
+/// tiers that chatter does not type as `%mor`.
+fn find_mor_items(
     u: &talkbank_model::Utterance,
     mor_key: Option<&str>,
     errors: &ErrorCollector,
-) -> Option<MorTier> {
-    let key = mor_key?;
-    for dt in u.dependent_tiers.iter() {
-        if format!("%{}", dt.kind()) != key {
-            continue;
+) -> Option<Vec<MorItem>> {
+    match find_tier(u, mor_key)? {
+        DependentTier::Mor(m) => Some(mor_items_from_tier(m)),
+        DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
+            backend::parse_mor(t.content.as_str(), errors).map(|tier| mor_items_from_tier(&tier))
         }
-        return match dt {
-            DependentTier::Mor(m) => Some(m.clone()),
-            DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
-                backend::parse_mor(t.content.as_str(), errors)
-            }
-            _ => None,
-        };
+        _ => None,
     }
-    None
 }
 
-fn find_gra_tier(
+/// Grammatical-relation items for the tier selected by `gra_key`.
+fn find_gra_items(
     u: &talkbank_model::Utterance,
     gra_key: Option<&str>,
     errors: &ErrorCollector,
-) -> Option<GraTier> {
-    let key = gra_key?;
-    for dt in u.dependent_tiers.iter() {
-        if format!("%{}", dt.kind()) != key {
-            continue;
+) -> Option<Vec<Gra>> {
+    match find_tier(u, gra_key)? {
+        DependentTier::Gra(g) => Some(gra_items_from_tier(g)),
+        DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
+            backend::parse_gra(t.content.as_str(), errors).map(|tier| gra_items_from_tier(&tier))
         }
-        return match dt {
-            DependentTier::Gra(g) => Some(g.clone()),
-            DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
-                backend::parse_gra(t.content.as_str(), errors)
-            }
-            _ => None,
-        };
+        _ => None,
     }
-    None
 }
 
 /// Flatten a chatter `MorTier` into rustling's legacy `MorItem` sequence:
@@ -398,14 +437,24 @@ fn gra_items_from_tier(tier: &GraTier) -> Vec<Gra> {
         .collect()
 }
 
-/// Render a `MorWord` as legacy `(pos, mor)`: chatter writes `pos|lemma-feat…`,
-/// split at the first `|`.
+/// Render a `MorWord` as legacy `(pos, mor)`.
+///
+/// chatter writes `POS|lemma[-Feature]*`. The part of speech is taken from the
+/// typed `pos` field rather than by splitting at the first `|`, and the
+/// remainder (lemma plus features) is whatever chatter serialized after it, so
+/// the split point cannot drift from the value it is supposed to describe.
 fn render_mor(mw: &MorWord) -> (String, String) {
     let mut s = String::new();
     let _ = mw.write_chat(&mut s);
-    match s.split_once('|') {
-        Some((pos, mor)) => (pos.to_string(), mor.to_string()),
-        None => (String::new(), s),
+    let pos = mw.pos.as_str();
+    match s.strip_prefix(pos).and_then(|rest| rest.strip_prefix('|')) {
+        Some(mor) => (pos.to_string(), mor.to_string()),
+        // Serialization did not start with `POS|` (e.g. an empty pos): fall back
+        // to the first `|` so the pair still round-trips something sensible.
+        None => match s.split_once('|') {
+            Some((pos, mor)) => (pos.to_string(), mor.to_string()),
+            None => (String::new(), s),
+        },
     }
 }
 
@@ -414,19 +463,12 @@ fn render_mor(mw: &MorWord) -> (String, String) {
 // ---------------------------------------------------------------------------
 
 fn push_word(w: &Word, out: &mut Vec<String>) {
-    // Drop unintelligible (xxx/yyy/www) and non-spoken word categories, matching
-    // the legacy word filter; keep everything else via chatter's cleaned text.
-    if w.untranscribed().is_some() {
+    // `counts_for_tier` is chatter's canonical %mor-alignability gate (drops
+    // omissions, fillers, fragments, nonwords and untranscribed xxx/yyy/www).
+    // Deferring to it keeps our word count identical to the count chatter's own
+    // alignment validation uses, instead of duplicating the category list here.
+    if !counts_for_tier(w, TierDomain::Mor) {
         return;
-    }
-    if let Some(cat) = &w.category {
-        use talkbank_model::WordCategory::*;
-        if matches!(
-            cat,
-            Omission | Filler | PhonologicalFragment | Nonword | CAOmission
-        ) {
-            return;
-        }
     }
     let cleaned = w.cleaned_text();
     if !cleaned.is_empty() {
@@ -434,9 +476,31 @@ fn push_word(w: &Word, out: &mut Vec<String>) {
     }
 }
 
+/// Push the words a `[: replacement]` contributes to `%mor` alignment.
+///
+/// `%mor` follows the corrected transcript slot, so the replacement words align
+/// when present and the original surface word only when there is no
+/// replacement. `[e]`-excluded material contributes nothing.
+fn push_replaced_word(r: &ReplacedWord, out: &mut Vec<String>) {
+    if annotations_have_alignment_ignore(&r.scoped_annotations) {
+        return;
+    }
+    if r.replacement.words.is_empty() {
+        push_word(&r.word, out);
+    } else {
+        for w in r.replacement.words.iter() {
+            push_word(w, out);
+        }
+    }
+}
+
 fn push_separator(s: &Separator, out: &mut Vec<String>) {
-    // CA separators (commas, etc.) align with `cm|cm`-style mor items, so they
-    // surface as word tokens.
+    // Only tag-marker separators carry `%mor` items (Tag -> end|end, Vocative ->
+    // beg|beg, Comma -> cm|cm); the rest are punctuation with no mor item and
+    // must not become word tokens.
+    if !is_tag_marker_separator(s) {
+        return;
+    }
     let mut buf = String::new();
     let _ = s.write_chat(&mut buf);
     let text = buf.trim();
@@ -445,43 +509,18 @@ fn push_separator(s: &Separator, out: &mut Vec<String>) {
     }
 }
 
-fn collect_words_uc(items: &[UtteranceContent], out: &mut Vec<String>) {
-    for item in items {
-        match item {
-            UtteranceContent::Word(w) => push_word(w, out),
-            UtteranceContent::AnnotatedWord(a) => push_word(&a.inner, out),
-            UtteranceContent::ReplacedWord(r) => {
-                for w in r.replacement.words.0.iter() {
-                    push_word(w, out);
-                }
-            }
-            UtteranceContent::Group(g) => collect_words_bi(&g.content.content, out),
-            UtteranceContent::AnnotatedGroup(a) => collect_words_bi(&a.inner.content.content, out),
-            UtteranceContent::Quotation(q) => collect_words_bi(&q.content.content, out),
-            UtteranceContent::Separator(s) => push_separator(s, out),
-            // Retraces are excluded from %mor alignment; other content items
-            // (events, pauses, overlaps, markers) carry no word tokens.
-            _ => {}
-        }
-    }
-}
-
-fn collect_words_bi(items: &[BracketedItem], out: &mut Vec<String>) {
-    for item in items {
-        match item {
-            BracketedItem::Word(w) => push_word(w, out),
-            BracketedItem::AnnotatedWord(a) => push_word(&a.inner, out),
-            BracketedItem::ReplacedWord(r) => {
-                for w in r.replacement.words.0.iter() {
-                    push_word(w, out);
-                }
-            }
-            BracketedItem::AnnotatedGroup(a) => collect_words_bi(&a.inner.content.content, out),
-            BracketedItem::Quotation(q) => collect_words_bi(&q.content.content, out),
-            BracketedItem::Separator(s) => push_separator(s, out),
-            _ => {}
-        }
-    }
+/// Collect the main-tier words that align with `%mor`.
+///
+/// Traversal is delegated to chatter's `walk_words` with [`TierDomain::Mor`], so
+/// the domain rules (descend into groups/quotations/phonological groups, skip
+/// retraces and `[e]`-excluded material) stay in sync with the alignment
+/// policy chatter validates against, rather than being re-derived here.
+fn collect_words(items: &[UtteranceContent], out: &mut Vec<String>) {
+    walk_words(items, Some(TierDomain::Mor), &mut |item| match item {
+        WordItem::Word(w) => push_word(w, out),
+        WordItem::ReplacedWord(r) => push_replaced_word(r, out),
+        WordItem::Separator(s) => push_separator(s, out),
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +529,18 @@ fn collect_words_bi(items: &[BracketedItem], out: &mut Vec<String>) {
 
 fn slice(input: &str, span: talkbank_model::Span) -> &str {
     input.get(span.to_range()).unwrap_or("")
+}
+
+/// Extract the first `\x15start_end\x15` media bullet from raw tier text.
+///
+/// chatter's typed model exposes only the utterance-final bullet; transcripts
+/// aligned phrase by phrase carry bullets mid-utterance, which this recovers.
+fn first_time_mark(text: &str) -> Option<(i64, i64)> {
+    const BULLET: char = '\u{15}';
+    let after_open = &text[text.find(BULLET)? + BULLET.len_utf8()..];
+    let inner = &after_open[..after_open.find(BULLET)?];
+    let (start, end) = inner.split_once('_')?;
+    Some((start.trim().parse().ok()?, end.trim().parse().ok()?))
 }
 
 /// Extract the content after `*CODE:` / `%tier:` from a raw tier line slice.
@@ -582,7 +633,15 @@ fn map_participant(p: &talkbank_model::Participant) -> Participant {
         code: p.code.as_str().to_string(),
         name: p.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
         role: p.role.as_str().to_string(),
-        language: id.language.iter().next().map(|c| c.to_string()),
+        // `@ID` carries a comma-separated language list for bilingual speakers;
+        // keep every code rather than only the first.
+        language: opt_nonempty(
+            &id.language
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
         corpus: opt_nonempty(id.corpus.as_str()),
         age: id.age.as_ref().and_then(map_age),
         sex: id.sex.as_ref().map(|s| s.as_str().to_string()),
@@ -752,7 +811,7 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> Adapted {
-        parse_with_chatter(text, Some("%mor"), Some("%gra"), false)
+        parse_with_chatter(text, Some("%mor"), Some("%gra"), false, true)
     }
 
     const BASIC: &str = "@UTF8\n@Begin\n@Languages:\teng\n\
@@ -834,7 +893,7 @@ mod tests {
             @ID:\teng|test|CHI|||||Target_Child|||\n\
             *CHI:\tI want cookie .\n%xmor:\tpro|I v|want n|cookie .\n\
             %xgra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n@End\n";
-        let a = parse_with_chatter(text, Some("%xmor"), Some("%xgra"), false);
+        let a = parse_with_chatter(text, Some("%xmor"), Some("%xgra"), false, true);
         let tokens = a.events[0].tokens.as_ref().unwrap();
         assert_eq!(tokens[0].pos.as_deref(), Some("pro"));
         assert_eq!(tokens[0].gra.as_ref().unwrap().rel, "SUBJ");

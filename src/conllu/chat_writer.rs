@@ -86,18 +86,11 @@ pub(crate) fn conllu_file_to_chat_str(file: &ConlluFile) -> String {
 ///
 /// The events are built from the CoNLL-U token data directly (bypassing a
 /// CHAT-text round-trip through the parser). This avoids re-parsing arbitrary
-/// treebank surface text — which may contain CHAT-special characters (`[`, `<`,
-/// `&`, …) that the parser cannot represent — while still producing the same
+/// treebank surface text -- which may contain CHAT-special characters (`[`, `<`,
+/// `&`, ...) that the parser cannot represent -- while still producing the same
 /// word-only utterances the string round-trip did (mor/gra are kept as raw tier
 /// text, matching the `mor_tier=None` behavior of the CHAT conversion path).
 pub(crate) fn conllu_file_to_chat_file(file: &ConlluFile, id: String) -> ChatFile {
-    let raw = conllu_file_to_chat_str(file);
-    let raw_lines: Vec<String> = raw
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(String::from)
-        .collect();
-
     let headers = Headers {
         participants: vec![Participant {
             code: "SPK".to_string(),
@@ -107,26 +100,41 @@ pub(crate) fn conllu_file_to_chat_file(file: &ConlluFile, id: String) -> ChatFil
         ..Headers::default()
     };
 
+    let mut raw_lines = vec![
+        "@UTF8".to_string(),
+        "@Begin".to_string(),
+        "@Participants:\tSPK Speaker".to_string(),
+    ];
     let mut events = Vec::with_capacity(file.sentences.len());
+
+    // One pass per sentence produces both the raw tier lines and the utterance,
+    // so the serialized text and the in-memory events cannot drift apart.
     for sentence in &file.sentences {
         let (words, mor, gra) = sentence_parts(sentence);
+        let main_tier = words.join(" ");
+
         let tokens: Vec<Token> = words
-            .iter()
-            .map(|w| Token {
-                word: w.clone(),
+            .into_iter()
+            .map(|word| Token {
+                word,
                 pos: None,
                 mor: None,
                 gra: None,
             })
             .collect();
+
+        raw_lines.push(format!("*SPK:\t{main_tier}"));
         let mut tiers = HashMap::new();
-        tiers.insert("SPK".to_string(), words.join(" "));
+        tiers.insert("SPK".to_string(), main_tier);
         if !mor.is_empty() {
+            raw_lines.push(format!("%mor:\t{mor}"));
             tiers.insert("%mor".to_string(), mor);
         }
         if !gra.is_empty() {
+            raw_lines.push(format!("%gra:\t{gra}"));
             tiers.insert("%gra".to_string(), gra);
         }
+
         events.push(Utterance {
             participant: Some("SPK".to_string()),
             tokens: Some(tokens),
@@ -137,6 +145,7 @@ pub(crate) fn conllu_file_to_chat_file(file: &ConlluFile, id: String) -> ChatFil
             gra_tier_name: None,
         });
     }
+    raw_lines.push("@End".to_string());
 
     ChatFile::new(id, headers, events, raw_lines)
 }
