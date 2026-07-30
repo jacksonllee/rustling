@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.4.1`).
+  pinned as a git dependency (tag `v0.5.1`).
   Since crates.io doesn't allow git dependencies, this branch using `chatter`
   won't be merged in the Rustling's `main` branch for release yet --
   we need to wait for `chatter`'s crates to be available on crates.io.
@@ -39,12 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preclitics (`$` on the `%mor` tier, e.g. `v|da-give$pro|me&dat-me`) are not
   supported: `chatter` does not model them, so such a `%mor` tier fails to
   parse and the utterance is reported as a mor/word misalignment with no
-  `pos`/`mor` on its tokens. Postclitics (`~`) are unaffected.
+  `pos`/`mor` on its tokens. The raw tier text is still available from
+  `Utterance.tiers`. Postclitics (`~`) are unaffected.
 - Some checks the previous hand-written validator performed have no `chatter`
   equivalent yet, so `strict=True` no longer flags them: `@Media` name vs.
-  file name mismatches, tone terminators, pauses written inside a word,
-  invalid language codes, and zero-word forms. Validation is stricter overall
-  (see above), but these specific checks were lost.
+  file name mismatches, tone terminators, invalid language codes, and
+  zero-word forms. Validation is stricter overall (see above), but these
+  specific checks were lost.
 - The `[x N]` repetition marker is not yet implemented by `chatter`'s grammar,
   so `strict=True` rejects files containing it and lenient parsing degrades the
   affected utterance's word tokens (the marker's content can surface as word

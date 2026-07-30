@@ -633,7 +633,7 @@ class TestFromDir:
 
         CHAT parsing/validation is delegated to the official TalkBank ``chatter``
         crates. The exceptions below are the testchat/bad files that ``chatter``
-        v0.4.1 does not yet flag as errors (context-dependent checks such as
+        v0.5.1 does not yet flag as errors (context-dependent checks such as
         cross-tier consistency and retrace context). This list will likely shrink
         as ``chatter`` matures.
         """
@@ -649,7 +649,6 @@ class TestFromDir:
             "retrace-no-following-content.cha",
             # Form / marker / terminator / language context checks:
             "language-code.cha",
-            "pause-word.cha",
             "space-bracket.cha",
             "toneterminator.cha",
             # Participant code and zero-form edge cases:
