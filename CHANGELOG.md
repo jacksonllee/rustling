@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.5.1`).
+  pinned as a git dependency (tag `v0.10.0`).
   Since crates.io doesn't allow git dependencies, this branch using `chatter`
   won't be merged in the Rustling's `main` branch for release yet --
   we need to wait for `chatter`'s crates to be available on crates.io.
@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or sign groups (`‹…›`), and CA separators such as `;` and `:`.
 - `Participant.language` keeps every code declared in a multi-language `@ID`
   field (e.g. `"yue,eng"`) instead of only the first.
+- Strict-mode error messages now carry `chatter`'s canonical error code
+  alongside the variant name (e.g. `[E301 MissingTerminator]` where they
+  previously read `[MissingTerminator]`). The code is the identifier
+  `chatter`'s error specs and documentation are keyed by, and it is stable
+  across the enum renames the variant names have seen.
+
+### Fixed
+
+- A continuation line beginning with `@`, `*` or `%` is no longer promoted to a
+  line of its own. CHAT wraps a long header or tier by starting the next line
+  with a tab, but rustling classified lines by their first character *after*
+  trimming, which discards exactly the indentation that marks a continuation.
+  A wrapped `@Comment` listing header names (`@Transcriber, @Transcription` on
+  the continuation line) was therefore split off as a bare line, which
+  `chatter` then reported as unparsable file-level content, so a valid
+  transcript failed to load under `strict=True`. Sources that are indented as a
+  whole are still read as ordinary lines: the file's common indent is removed
+  before continuations are looked for.
 
 ### Known limitations
 

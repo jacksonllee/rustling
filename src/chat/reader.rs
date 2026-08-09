@@ -194,15 +194,31 @@ impl From<std::io::Error> for ChatError {
 /// A leading byte-order mark is stripped first: U+FEFF is not whitespace, so it
 /// would otherwise keep the opening `@UTF8` from being recognized as a header
 /// and drop the line entirely.
+///
+/// Continuation lines are identified by their leading whitespace, which CHAT
+/// requires (a wrapped tier or header line begins with a tab), and that test
+/// has to happen before the line is trimmed. Classifying the trimmed text by
+/// its first character instead would promote any continuation that happens to
+/// begin with `@`, `*` or `%` to a line of its own -- which a wrapped
+/// `@Comment` listing header names does, and chatter then reports the orphaned
+/// fragment as unparsable file-level content.
+///
+/// The file's common indent is removed first, so that a source indented as a
+/// whole (as hand-written CHAT fragments often are) is still read as ordinary
+/// lines rather than as one line and a run of continuations. Only indentation
+/// beyond what every line shares marks a continuation.
 fn normalized_text(chat_str: &str) -> String {
     let chat_str = chat_str.strip_prefix('\u{feff}').unwrap_or(chat_str);
+    let common = common_indent(chat_str);
     let mut out = String::with_capacity(chat_str.len());
     for raw_line in chat_str.lines() {
+        let raw_line = raw_line.strip_prefix(common).unwrap_or(raw_line);
+        let indented = raw_line.starts_with([' ', '\t']);
         let line = raw_line.trim();
         if line.is_empty() {
             continue;
         }
-        if line.starts_with('*') || line.starts_with('%') || line.starts_with('@') {
+        if !indented && line.starts_with(['*', '%', '@']) {
             if !out.is_empty() {
                 out.push('\n');
             }
@@ -214,6 +230,37 @@ fn normalized_text(chat_str: &str) -> String {
         }
     }
     out
+}
+
+/// The longest leading run of spaces/tabs shared by every non-blank line.
+///
+/// Returns `""` as soon as any line starts at column 0, which is the usual case
+/// for a real transcript and makes this a single cheap pass.
+fn common_indent(chat_str: &str) -> &str {
+    let mut common: Option<&str> = None;
+    for line in chat_str.lines() {
+        let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+        // A blank line carries no indentation of its own to contribute.
+        if line[indent_len..].is_empty() {
+            continue;
+        }
+        let indent = &line[..indent_len];
+        common = Some(match common {
+            None => indent,
+            Some(prev) => {
+                let shared = prev
+                    .bytes()
+                    .zip(indent.bytes())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                &prev[..shared]
+            }
+        });
+        if common.is_some_and(str::is_empty) {
+            break;
+        }
+    }
+    common.unwrap_or("")
 }
 
 /// Build tokens by aligning words with morphology and grammar data.
@@ -1524,6 +1571,35 @@ mod tests {
         assert!(lines[1].starts_with("*CHI:"));
         assert!(lines[2].starts_with("*MOT:"));
         assert!(lines[3].starts_with("@End"));
+    }
+
+    /// A continuation line may itself begin with `@`, `*` or `%` -- a wrapped
+    /// `@Comment` listing header names does. It is the leading tab, not the
+    /// first character, that makes it a continuation, and promoting it to its
+    /// own line leaves chatter an orphaned fragment it reports as unparsable
+    /// file-level content.
+    #[test]
+    fn test_get_lines_folds_continuation_starting_with_at_sign() {
+        let input = "@Begin\n@Comment:\tMetadata headers: @Date,\n\t@Transcriber, @Transcription\n*CHI:\thi .\n@End\n";
+        let lines = get_lines(input);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(
+            lines[1],
+            "@Comment:\tMetadata headers: @Date, @Transcriber, @Transcription"
+        );
+        assert!(lines[2].starts_with("*CHI:"));
+    }
+
+    /// The whole-file indent is removed before continuations are looked for, so
+    /// a uniformly indented source keeps its line structure while a line
+    /// indented beyond that shared prefix still folds.
+    #[test]
+    fn test_get_lines_indented_file_with_continuation() {
+        let input = "  @Begin\n  @Comment:\tone\n  \ttwo\n  *CHI:\thi .\n  @End\n";
+        let lines = get_lines(input);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[1], "@Comment:\tone two");
+        assert!(lines[2].starts_with("*CHI:"));
     }
 
     #[test]

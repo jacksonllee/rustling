@@ -206,8 +206,8 @@ fn handle_diagnostics(chat: &Chat, strict: bool) -> PyResult<()> {
                 continue;
             }
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "{}: [{}] {}",
-                d.file_path, d.code, d.message
+                "{}: [{} {}] {}",
+                d.file_path, d.code, d.name, d.message
             )));
         }
     }

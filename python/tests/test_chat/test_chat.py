@@ -1,6 +1,7 @@
 """Tests for rustling.chat.CHAT."""
 
 import datetime
+import re
 import warnings
 
 import pytest
@@ -585,91 +586,49 @@ class TestLeadingWhitespace:
 
 
 class TestFromDir:
-    def test_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         assert reader.n_files > 0
 
-    def test_from_dir_with_path(self, testchat_good_dir):
+    def test_from_dir_with_path(self, reference_corpus_dir):
         """from_dir accepts pathlib.Path directly."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(testchat_good_dir, strict=False)
+        reader = CHAT.from_dir(reference_corpus_dir, strict=False)
         assert reader.n_files > 0
 
-    def test_from_dir_with_match(self, testchat_good_dir):
-        reader = CHAT.from_dir(str(testchat_good_dir), match="action")
+    def test_from_dir_is_recursive(self, reference_corpus_dir, reference_corpus_files):
+        """The reference corpus is nested by topic, so from_dir must recurse."""
+        reader = CHAT.from_dir(reference_corpus_dir, strict=False)
+        assert reader.n_files == len(reference_corpus_files)
+
+    def test_from_dir_with_match(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), match="child")
         paths = reader.file_paths
         assert len(paths) > 0
-        assert all("action" in p for p in paths)
+        assert all("child" in p for p in paths)
 
-    def test_utterances_from_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_utterances_from_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         utts = reader.utterances()
         assert len(utts) > 0
 
-    def test_words_from_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_words_from_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         words = reader.words()
         assert len(words) > 0
 
-    def test_testchat_strict_compliance(self, testchat_good_dir):
-        """Report which testchat/good files would fail strict=True."""
-        try:
-            CHAT.from_dir(str(testchat_good_dir), strict=True)
-        except ValueError as e:
-            warnings.warn(
-                f"testchat/good files failing strict=True:\n\n{e}",
-                stacklevel=1,
-            )
+    def test_reference_corpus_parses_strict(
+        self, reference_corpus_dir, reference_corpus_files
+    ):
+        """Every file in chatter's reference corpus must load with strict=True.
 
-    def test_testchat_bad_files_catch_errors(self, testchat_bad_dir):
-        """Every testchat/bad file must raise a parsing error with strict=True.
-
-        CHAT parsing/validation is delegated to the official TalkBank ``chatter``
-        crates. The exceptions below are the testchat/bad files that ``chatter``
-        v0.5.1 does not yet flag as errors (context-dependent checks such as
-        cross-tier consistency and retrace context). This list will likely shrink
-        as ``chatter`` matures.
+        The reference corpus is chatter's own 100%-pass gate: each file is
+        constructed to exercise a CHAT construct and both of chatter's parsers
+        must agree on all of them. So a failure here is rustling's, not
+        chatter's -- either in the adapter or in what rustling does to the
+        source before handing it over.
         """
-        known_exceptions = {
-            # Cross-tier (%mor) context checks:
-            "mornumber-spanish.cha",
-            # Media validation:
-            "media-bad-name.cha",
-            "media-notrans-bullets.cha",
-            # Retrace followed-by-content checks:
-            "retrace-in-group-bad.cha",
-            "retrace-multiple-no-following.cha",
-            "retrace-no-following-content.cha",
-            # Form / marker / terminator / language context checks:
-            "language-code.cha",
-            "space-bracket.cha",
-            "toneterminator.cha",
-            # Participant code and zero-form edge cases:
-            "who.cha",
-            "zero-others.cha",
-            "zero-word.cha",
-        }
-        no_error_files = []
-        for path in sorted(testchat_bad_dir.glob("*.cha")):
-            if path.name in known_exceptions:
-                continue
-            try:
-                CHAT.from_files([str(path)], strict=True)
-            except Exception:
-                pass
-            else:
-                no_error_files.append(path.name)
-        assert not no_error_files, (
-            f"{len(no_error_files)} testchat/bad files that raised no parsing error:\n"
-            + "\n".join(no_error_files)
-        )
+        assert len(reference_corpus_files) > 0
+        CHAT.from_dir(reference_corpus_dir, strict=True)
 
     def test_private_data_strict_compliance(self, private_data_dir):
         """Report which private test data files would fail strict=True."""
@@ -682,35 +641,166 @@ class TestFromDir:
             )
 
 
+class TestChatterErrorSpecs:
+    """strict=True must reject the invalid CHAT that chatter's specs describe.
+
+    ``spec/errors`` is the successor to the old testchat ``bad/`` directory and
+    is richer than it: each example carries the error code it is expected to
+    trigger, so these tests check not just that loading fails but that the
+    reported code is the right one.
+
+    Both baselines below are compared for exact equality rather than as
+    allowlists. An entry that starts passing is as much a change worth seeing
+    as one that starts failing, and this branch tracks chatter closely enough
+    that either should be noticed at the next version bump.
+    """
+
+    # Statuses describing a rule that chatter does not enforce from CHAT input
+    # today, so no failure is expected from its example.
+    UNENFORCED_STATUSES = frozenset(
+        {"not_implemented", "deprecated", "unreachable_from_chat"}
+    )
+
+    # Examples that load cleanly. Verified against chatter's own API to
+    # establish which side each one is on.
+    NO_ERROR_RAISED = {
+        # chatter reports E603 as a Warning, and strict=True raises only on
+        # errors, so accepting these is the intended behaviour.
+        "E603_invalid_tim_tier_format.md#0",
+        # rustling's own doing: normalized_text drops blank lines before
+        # chatter can see them, and a blank line is exactly what E747 reports.
+        "E747_blank_line_not_allowed.md#0",
+        # chatter emits no diagnostic at all for these, on the raw spec text,
+        # despite the spec declaring the rule implemented.
+        "E552_media_unlinked_with_timing.md#1",
+        "E725_modsyl_mod_count_mismatch.md#0",
+        "E726_phosyl_pho_count_mismatch.md#0",
+        "E727_phoaln_mod_count_mismatch.md#0",
+        "E728_phoaln_pho_count_mismatch.md#0",
+        "E733_auto.md#0",
+        "E734_auto.md#0",
+    }
+
+    # Rejected, but reported through rustling's own mor/word misalignment
+    # channel, which runs before chatter's diagnostics and so masks the code.
+    REPORTED_AS_MISALIGNMENT = {
+        "E316_angle_bracket_in_mor_stem.md#0",
+        "E316_angle_bracket_in_mor_stem.md#1",
+        "E316_auto.md#7",
+        "E382_auto.md#0",
+        "E382_auto.md#1",
+        "E382_auto.md#2",
+        "E705_auto.md#0",
+        "E705_auto.md#1",
+        "E706_auto.md#0",
+        "E706_auto.md#1",
+        "E706_auto.md#2",
+        "E706_auto.md#3",
+        "E760_mor_item_empty_pos.md#0",
+        "E760_mor_item_empty_pos.md#1",
+    }
+
+    # Rejected, but under a different code: these fixtures trip a second rule
+    # that fires first, and rustling raises on the first error it is given
+    # rather than reporting the whole diagnostic set.
+    OTHER_CODE_REPORTED_FIRST = {
+        "E244_auto.md#0",
+        "E253_auto.md#0",
+        "E306_auto.md#0",
+        "E307_auto.md#0",
+        "E308_auto.md#0",
+        "E308_auto.md#1",
+        "E326_auto.md#0",
+        "E358_auto.md#0",
+        "E359_auto.md#0",
+        "E367_auto.md#0",
+        "E368_auto.md#0",
+        "E502_wor_cascade_regression.md#0",
+        "E503_auto.md#0",
+        "E506_auto.md#0",
+        "E508_auto.md#0",
+        "E515_auto.md#0",
+        "E516_auto.md#0",
+        "E518_auto.md#0",
+        "E518_auto.md#1",
+        "E518_auto.md#2",
+        "E518_auto.md#3",
+        "E518_auto.md#5",
+        "E522_auto.md#0",
+        "E525_auto.md#0",
+        "E525_auto.md#1",
+        "E525_auto.md#3",
+        "E525_auto.md#4",
+        "E526_auto.md#0",
+        "E527_auto.md#0",
+        "E529_auto.md#0",
+        "E530_auto.md#0",
+        "E531_auto.md#0",
+        "E533_auto.md#0",
+        "E534_unsupported_option.md#0",
+        "E600_auto.md#0",
+        "E701_auto.md#0",
+        "E701_auto.md#1",
+        "E712_auto.md#0",
+        "E720_auto.md#0",
+        "E756_empty_user_defined_tier.md#0",
+        "E758_leading_space_on_main_tier.md#4",
+    }
+
+    def _enforced(self, error_specs):
+        return [s for s in error_specs if s.status not in self.UNENFORCED_STATUSES]
+
+    @staticmethod
+    def _load(spec, tmp_path, index):
+        path = tmp_path / f"spec_{index}.cha"
+        path.write_text(spec.chat)
+        CHAT.from_files([str(path)], strict=True)
+
+    def test_specs_were_extracted(self, error_specs):
+        """Guard against a spec-format change silently emptying these tests."""
+        assert len(self._enforced(error_specs)) > 200
+
+    def test_invalid_examples_are_rejected(self, error_specs, tmp_path):
+        accepted = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception:
+                continue
+            accepted.add(spec.key)
+        assert accepted == self.NO_ERROR_RAISED
+
+    def test_expected_error_code_is_reported(self, error_specs, tmp_path):
+        code_re = re.compile(r"E\d{3}")
+        wrong_code = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if not set(code_re.findall(str(e))) & set(spec.expected_codes):
+                    wrong_code.add(spec.key)
+        assert wrong_code == (
+            self.REPORTED_AS_MISALIGNMENT | self.OTHER_CODE_REPORTED_FIRST
+        )
+
+
 class TestFromFiles:
-    def test_from_files(self, testchat_good_dir):
-        import glob
+    def test_from_files(self, reference_corpus_files):
+        cha_files = [str(p) for p in reference_corpus_files[:3]]
+        reader = CHAT.from_files(cha_files, strict=False)
+        assert reader.n_files == len(cha_files)
 
-        cha_files = sorted(glob.glob(str(testchat_good_dir / "*.cha")))[:3]
-        if cha_files:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(cha_files, strict=False)
-            assert reader.n_files == len(cha_files)
-
-    def test_from_files_with_path(self, testchat_good_dir):
+    def test_from_files_with_path(self, reference_corpus_files):
         """from_files accepts pathlib.Path objects in the list."""
-        paths = sorted(testchat_good_dir.glob("*.cha"))[:3]
-        if paths:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(paths, strict=False)
-            assert reader.n_files == len(paths)
+        paths = reference_corpus_files[:3]
+        reader = CHAT.from_files(paths, strict=False)
+        assert reader.n_files == len(paths)
 
-    def test_from_files_mixed_str_and_path(self, testchat_good_dir):
+    def test_from_files_mixed_str_and_path(self, reference_corpus_files):
         """from_files accepts a mix of str and pathlib.Path."""
-        all_paths = sorted(testchat_good_dir.glob("*.cha"))[:2]
-        if len(all_paths) >= 2:
-            mixed = [str(all_paths[0]), all_paths[1]]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(mixed, strict=False)
-            assert reader.n_files == 2
+        first, second = reference_corpus_files[:2]
+        reader = CHAT.from_files([str(first), second], strict=False)
+        assert reader.n_files == 2
 
 
 class TestAppend:
@@ -1061,12 +1151,10 @@ class TestToStrs:
         reader = CHAT.from_strs([])
         assert reader.to_strs() == []
 
-    def test_to_strs_round_trip_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
-            strs = reader.to_strs()
-            reader2 = CHAT.from_strs(strs, strict=False)
+    def test_to_strs_round_trip_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
+        strs = reader.to_strs()
+        reader2 = CHAT.from_strs(strs, strict=False)
         assert reader.words() == reader2.words()
 
 
@@ -1136,12 +1224,10 @@ class TestToFiles:
                 filenames=["only_one.cha"],
             )
 
-    def test_to_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+    def test_to_files_preserves_filenames(self, reference_corpus_dir, tmp_path):
         import os
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
         # Filenames should be derived from original file paths.
@@ -1149,13 +1235,18 @@ class TestToFiles:
             expected = os.path.splitext(os.path.basename(fp))[0] + ".cha"
             assert os.path.exists(os.path.join(out_dir, expected)), expected
 
-    def test_to_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
-            out_dir = str(tmp_path / "output")
-            reader.to_files(out_dir)
-            reader2 = CHAT.from_dir(out_dir, strict=False)
+    def test_to_files_round_trip_real_files(self, reference_corpus_files, tmp_path):
+        # from_dir orders files by full path, but the reference corpus is nested
+        # by topic and to_files writes one flat directory, so reading the output
+        # back with from_dir would compare the two sides in different orders.
+        # Drive both from the same basename ordering instead.
+        paths = sorted(reference_corpus_files, key=lambda p: p.name)
+        reader = CHAT.from_files(paths, strict=False)
+        out_dir = tmp_path / "output"
+        reader.to_files(str(out_dir))
+        written = sorted(out_dir.glob("*.cha"), key=lambda p: p.name)
+        assert len(written) == len(paths)
+        reader2 = CHAT.from_files(written, strict=False)
         assert reader.words() == reader2.words()
 
 
@@ -1243,12 +1334,10 @@ class TestToElan:
         assert os.path.exists(os.path.join(out_dir, "0001.eaf"))
         assert os.path.exists(os.path.join(out_dir, "0002.eaf"))
 
-    def test_to_elan_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+    def test_to_elan_files_preserves_filenames(self, reference_corpus_dir, tmp_path):
         import os
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_elan_files(out_dir)
         # Filenames should be derived from original .cha paths with .eaf extension.
@@ -1256,12 +1345,10 @@ class TestToElan:
             expected = os.path.splitext(os.path.basename(fp))[0] + ".eaf"
             assert os.path.exists(os.path.join(out_dir, expected)), expected
 
-    def test_to_elan_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
+    def test_to_elan_files_round_trip_real_files(self, reference_corpus_dir, tmp_path):
         from rustling.elan import ELAN
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_elan_files(out_dir)
         elan = ELAN.from_dir(out_dir)
@@ -1277,10 +1364,8 @@ class TestPopAndStitch:
         reader.append(popped)
         assert reader.n_files == n
 
-    def test_pop_and_append_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_pop_and_append_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         n = reader.n_files
         all_words = reader.words()
         popped = reader.pop()
@@ -1517,28 +1602,22 @@ class TestHeadersMultipleFiles:
 
 
 class TestHeadersRealFiles:
-    def test_headers_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_headers_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         headers = reader.headers()
         assert len(headers) == reader.n_files
         for h in headers:
             assert isinstance(h, Headers)
 
-    def test_languages_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_languages_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         langs = reader.languages(by_file=True)
         assert len(langs) == reader.n_files
         for file_langs in langs:
             assert isinstance(file_langs, list)
 
-    def test_participants_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_participants_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         parts = reader.participants(by_file=True)
         assert len(parts) == reader.n_files
         for file_parts in parts:

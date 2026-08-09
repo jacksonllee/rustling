@@ -104,8 +104,12 @@ mod backend {
 /// rustling's strict-mode policy needs.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatDiagnostic {
-    /// The `ErrorCode` variant name (e.g. `"MissingUTF8Header"`).
+    /// chatter's canonical error code (e.g. `"E301"`). This is the identifier
+    /// chatter's own error specs and documentation are keyed by, and it is
+    /// stable across the variant renames the enum itself has seen.
     pub(crate) code: String,
+    /// The `ErrorCode` variant name (e.g. `"MissingUTF8Header"`).
+    pub(crate) name: String,
     /// Whether the diagnostic is an error (vs a warning).
     pub(crate) is_error: bool,
     /// Whether this is the `%mor`/word count mismatch that rustling reports
@@ -200,7 +204,8 @@ fn looks_like_transcript(file_text: &str) -> bool {
 fn collect_diagnostics(errors: &[ParseError], out: &mut Vec<ChatDiagnostic>) {
     for e in errors {
         out.push(ChatDiagnostic {
-            code: format!("{:?}", e.code),
+            code: e.code.as_str().to_string(),
+            name: format!("{:?}", e.code),
             is_error: matches!(e.severity, Severity::Error),
             // Match the two `%mor`-vs-word codes exactly. chatter has a dozen
             // other `*CountMismatch*` codes (`%gra`, `%pho`, `%sin`, `%mod`,
@@ -292,7 +297,7 @@ fn map_utterance(
     let main_text = tier_content(slice(input, u.main.span));
     tiers.insert(participant.clone(), main_text.clone());
     for dt in u.dependent_tiers.iter() {
-        if let Some((name, content)) = tier_name_and_content(slice(input, dt.tier.span())) {
+        if let Some((name, content)) = tier_name_and_content(slice(input, dt.span())) {
             tiers.insert(name, content);
         }
     }
@@ -353,16 +358,17 @@ fn map_utterance(
 
 /// Find the dependent tier named `key` (e.g. `"%mor"`).
 ///
-/// `dependent_tiers` holds `DependentTierEntry` (tier + separator provenance)
-/// as of chatter v0.4.0, so the tier is reached through `.tier`. chatter's
-/// `kind()` is the bare name (`mor`), so the `%` prefix is stripped from the
-/// key rather than formatted onto every tier name.
+/// `dependent_tiers` holds `DependentTierEntry` (tier + separator provenance).
+/// Since chatter v0.9.0 the entry forwards `kind()`, so the wrapper is matched
+/// on directly rather than being unwrapped to its `.tier` first. `kind()` is
+/// the bare name (`mor`), so the `%` prefix is stripped from the key rather
+/// than formatted onto every tier name.
 fn find_tier<'a>(u: &'a talkbank_model::Utterance, key: Option<&str>) -> Option<&'a DependentTier> {
     let name = key?.strip_prefix('%')?;
     u.dependent_tiers
         .iter()
+        .find(|entry| entry.kind() == name)
         .map(|entry| &entry.tier)
-        .find(|tier| tier.kind() == name)
 }
 
 /// Morphology items for the tier selected by `mor_key`, parsing custom `%x…`
@@ -375,7 +381,10 @@ fn find_mor_items(
     match find_tier(u, mor_key)? {
         DependentTier::Mor(m) => Some(mor_items_from_tier(m)),
         DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
-            backend::parse_mor(t.content.as_str(), errors).map(|tier| mor_items_from_tier(&tier))
+            // `content` is `Option` as of chatter v0.9.0: a `%x` line that
+            // declared a tier and gave it nothing has no items to parse.
+            backend::parse_mor(t.content.as_ref()?.as_str(), errors)
+                .map(|tier| mor_items_from_tier(&tier))
         }
         _ => None,
     }
@@ -390,7 +399,8 @@ fn find_gra_items(
     match find_tier(u, gra_key)? {
         DependentTier::Gra(g) => Some(gra_items_from_tier(g)),
         DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
-            backend::parse_gra(t.content.as_str(), errors).map(|tier| gra_items_from_tier(&tier))
+            backend::parse_gra(t.content.as_ref()?.as_str(), errors)
+                .map(|tier| gra_items_from_tier(&tier))
         }
         _ => None,
     }
@@ -437,25 +447,15 @@ fn gra_items_from_tier(tier: &GraTier) -> Vec<Gra> {
         .collect()
 }
 
-/// Render a `MorWord` as legacy `(pos, mor)`.
+/// Render a `MorWord` as rustling's `(pos, mor)` pair.
 ///
-/// chatter writes `POS|lemma[-Feature]*`. The part of speech is taken from the
-/// typed `pos` field rather than by splitting at the first `|`, and the
-/// remainder (lemma plus features) is whatever chatter serialized after it, so
-/// the split point cannot drift from the value it is supposed to describe.
+/// chatter writes a `%mor` item as `POS|lemma[-Feature]*`; rustling's `Token`
+/// keeps the two halves in separate fields. Both are read directly off the
+/// typed model -- `pos` from the field, the analysis from `analysis()` (added
+/// in chatter v0.9.0) -- so neither half is recovered by splitting a rendered
+/// string, and the split point cannot drift from the value it describes.
 fn render_mor(mw: &MorWord) -> (String, String) {
-    let mut s = String::new();
-    let _ = mw.write_chat(&mut s);
-    let pos = mw.pos.as_str();
-    match s.strip_prefix(pos).and_then(|rest| rest.strip_prefix('|')) {
-        Some(mor) => (pos.to_string(), mor.to_string()),
-        // Serialization did not start with `POS|` (e.g. an empty pos): fall back
-        // to the first `|` so the pair still round-trips something sensible.
-        None => match s.split_once('|') {
-            Some((pos, mor)) => (pos.to_string(), mor.to_string()),
-            None => (String::new(), s),
-        },
-    }
+    (mw.pos.to_string(), mw.analysis().to_string())
 }
 
 // ---------------------------------------------------------------------------
