@@ -11,6 +11,7 @@ from rustling.chat._read_chat import read_chat
 Age = _chat.Age
 CHAT = _chat.CHAT
 ChangeableHeader = _chat.ChangeableHeader
+Diagnostic = _chat.Diagnostic
 Gra = _chat.Gra
 Headers = _chat.Headers
 Participant = _chat.Participant
@@ -22,6 +23,7 @@ __all__ = [
     "Age",
     "CHAT",
     "ChangeableHeader",
+    "Diagnostic",
     "Gra",
     "Headers",
     "Participant",

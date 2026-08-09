@@ -55,6 +55,7 @@ rustling.chat.ChangeableHeader.Page.__new__
 rustling.chat.ChangeableHeader.Situation
 rustling.chat.ChangeableHeader.Situation.__init__
 rustling.chat.ChangeableHeader.Situation.__new__
+rustling.chat.Diagnostic
 rustling.chat.Gra
 rustling.chat.Gra.__init__
 rustling.chat.Gra.__new__

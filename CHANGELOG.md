@@ -38,6 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously read `[MissingTerminator]`). The code is the identifier
   `chatter`'s error specs and documentation are keyed by, and it is stable
   across the enum renames the variant names have seen.
+- **BREAKING:** `strict=True` now reports every problem it found, not the first
+  one. The `ValueError` opens with `Found N problem(s) in M file(s):` and lists
+  them, capped at 50 with a count of what was omitted. `chatter`'s diagnostics
+  and rustling's mor/word misalignments are listed together rather than in
+  sequence: the alignment check used to run first and raise on its own, so an
+  utterance that broke a `chatter` rule *and* came out misaligned was rejected
+  under rustling's generic count message and the rule actually broken was never
+  named. Code matching on the exact text of these errors will need updating.
+- rustling now hands `chatter` the source as written. It previously trimmed
+  every line, dropped blank lines and folded continuation lines into the line
+  above -- reasonable when rustling parsed CHAT itself, but each transformation
+  removed something `chatter` needs to see. Only two normalizations remain, and
+  both only remove noise: a leading byte-order mark, and the indent shared by
+  every line of the file (so a source indented as a whole still parses).
+  `raw_lines`, and therefore `to_strs` / `to_files` output, is correspondingly
+  closer to the input than before.
+
+### Added
+
+- `CHAT.diagnostics` returns the `Diagnostic` objects `chatter` reported for
+  the loaded files, each carrying `code`, `name`, `is_error`, `message` and
+  `file_path`. Diagnostics are collected whether or not the data was loaded
+  with `strict=True`, so choosing to load a transcript leniently no longer
+  means giving up the ability to find out what is wrong with it. Semantic
+  validation still only runs under `strict=True`, so a lenient load reports
+  parse-level diagnostics only.
 
 ### Fixed
 
@@ -48,9 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A wrapped `@Comment` listing header names (`@Transcriber, @Transcription` on
   the continuation line) was therefore split off as a bare line, which
   `chatter` then reported as unparsable file-level content, so a valid
-  transcript failed to load under `strict=True`. Sources that are indented as a
-  whole are still read as ordinary lines: the file's common indent is removed
-  before continuations are looked for.
+  transcript failed to load under `strict=True`.
+- Blank lines now reach `chatter`, which is what E747 (`BlankLineNotAllowed`)
+  exists to report. rustling stripped them before `chatter` could see them, so
+  a rule `chatter` implements could never fire.
+- `Utterance.annotated`, `Utterance.audible` and the raw text in
+  `Utterance.tiers` are no longer empty in wasm/Pyodide builds. Those builds
+  use `chatter`'s re2c parser, which records no byte offsets at all, so slicing
+  the source with its spans yielded nothing for every utterance in every file.
+  rustling now falls back to its own line-block reading of the source when the
+  parser reports no spans, so these attributes are populated on both backends.
 
 ### Known limitations
 

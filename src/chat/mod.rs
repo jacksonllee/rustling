@@ -42,6 +42,7 @@ pub(crate) fn register_module(parent_module: &Bound<'_, PyModule>) -> PyResult<(
     chat_module.add_class::<PyChat>()?;
     chat_module.add_class::<PyToken>()?;
     chat_module.add_class::<Gra>()?;
+    chat_module.add_class::<crate::chat::from_chatter::ChatDiagnostic>()?;
     chat_module.add_class::<PyUtterance>()?;
     chat_module.add_class::<PyUtterances>()?;
     chat_module.add_class::<Headers>()?;

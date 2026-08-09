@@ -641,6 +641,68 @@ class TestFromDir:
             )
 
 
+class TestProblemReporting:
+    """strict=True reports every problem; lenient loads still expose them."""
+
+    # Two distinct faults in one file: an unknown annotation on the first
+    # utterance, and a %mor tier one item short on the second.
+    TWO_FAULTS = (
+        "@UTF8\n@Begin\n@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n"
+        "*CHI:\tthe dog [@@@] .\n"
+        "*CHI:\tthe big dog .\n"
+        "%mor:\tdet:art|the n|dog .\n"
+        "@End\n"
+    )
+
+    def _write(self, tmp_path, text):
+        path = tmp_path / "two_faults.cha"
+        path.write_text(text)
+        return str(path)
+
+    def test_strict_reports_both_channels_at_once(self, tmp_path):
+        """A chatter diagnostic no longer hides behind the misalignment report.
+
+        The alignment check used to run first and raise on its own, so the
+        rule that was actually broken never reached the user.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([self._write(tmp_path, self.TWO_FAULTS)], strict=True)
+        message = str(excinfo.value)
+        assert re.search(r"E\d{3}", message), message
+        assert "misalignment" in message
+        assert "Found 2 problem(s) in 1 file(s)" in message
+
+    def test_lenient_load_still_exposes_diagnostics(self, tmp_path):
+        """strict=False loads the file and keeps the diagnostics available."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_files(
+                [self._write(tmp_path, self.TWO_FAULTS)], strict=False
+            )
+        assert reader.n_files == 1
+        codes = {d.code for d in reader.diagnostics}
+        assert codes, "lenient load reported no diagnostics"
+        assert all(d.code.startswith("E") for d in reader.diagnostics)
+        assert all(d.file_path for d in reader.diagnostics)
+
+    def test_diagnostic_repr_and_fields(self, tmp_path):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_files(
+                [self._write(tmp_path, self.TWO_FAULTS)], strict=False
+            )
+        d = reader.diagnostics[0]
+        assert isinstance(d.code, str) and isinstance(d.name, str)
+        assert isinstance(d.is_error, bool) and isinstance(d.message, str)
+        assert "Diagnostic(code=" in repr(d)
+
+    def test_clean_file_has_no_diagnostics(self, reference_corpus_files):
+        reader = CHAT.from_files(reference_corpus_files[:5], strict=True)
+        assert reader.diagnostics == []
+
+
 class TestChatterErrorSpecs:
     """strict=True must reject the invalid CHAT that chatter's specs describe.
 
@@ -665,11 +727,8 @@ class TestChatterErrorSpecs:
     # establish which side each one is on.
     NO_ERROR_RAISED = {
         # chatter reports E603 as a Warning, and strict=True raises only on
-        # errors, so accepting these is the intended behaviour.
+        # errors, so accepting this is the intended behaviour.
         "E603_invalid_tim_tier_format.md#0",
-        # rustling's own doing: normalized_text drops blank lines before
-        # chatter can see them, and a blank line is exactly what E747 reports.
-        "E747_blank_line_not_allowed.md#0",
         # chatter emits no diagnostic at all for these, on the raw spec text,
         # despite the spec declaring the rule implemented.
         "E552_media_unlinked_with_timing.md#1",
@@ -681,70 +740,27 @@ class TestChatterErrorSpecs:
         "E734_auto.md#0",
     }
 
-    # Rejected, but reported through rustling's own mor/word misalignment
-    # channel, which runs before chatter's diagnostics and so masks the code.
+    # Rejected, but through rustling's mor/word misalignment channel, which
+    # reports the counts and tier text instead of a code. Both codes here are
+    # exactly the two rustling routes that way on purpose (E705 is
+    # MorCountMismatchTooFew, E706 MorCountMismatchTooMany), so this set is by
+    # design rather than a gap.
     REPORTED_AS_MISALIGNMENT = {
-        "E316_angle_bracket_in_mor_stem.md#0",
-        "E316_angle_bracket_in_mor_stem.md#1",
-        "E316_auto.md#7",
-        "E382_auto.md#0",
-        "E382_auto.md#1",
-        "E382_auto.md#2",
         "E705_auto.md#0",
         "E705_auto.md#1",
         "E706_auto.md#0",
         "E706_auto.md#1",
         "E706_auto.md#2",
         "E706_auto.md#3",
-        "E760_mor_item_empty_pos.md#0",
-        "E760_mor_item_empty_pos.md#1",
     }
 
-    # Rejected, but under a different code: these fixtures trip a second rule
-    # that fires first, and rustling raises on the first error it is given
-    # rather than reporting the whole diagnostic set.
-    OTHER_CODE_REPORTED_FIRST = {
-        "E244_auto.md#0",
-        "E253_auto.md#0",
-        "E306_auto.md#0",
-        "E307_auto.md#0",
-        "E308_auto.md#0",
-        "E308_auto.md#1",
-        "E326_auto.md#0",
-        "E358_auto.md#0",
-        "E359_auto.md#0",
-        "E367_auto.md#0",
-        "E368_auto.md#0",
+    # Rejected, and every diagnostic chatter produced is reported, but the code
+    # the spec names is not among them: these fixtures trip different rules
+    # than the spec expects.
+    EXPECTED_CODE_NOT_REPORTED = {
         "E502_wor_cascade_regression.md#0",
-        "E503_auto.md#0",
-        "E506_auto.md#0",
-        "E508_auto.md#0",
-        "E515_auto.md#0",
-        "E516_auto.md#0",
-        "E518_auto.md#0",
-        "E518_auto.md#1",
-        "E518_auto.md#2",
-        "E518_auto.md#3",
-        "E518_auto.md#5",
-        "E522_auto.md#0",
-        "E525_auto.md#0",
-        "E525_auto.md#1",
-        "E525_auto.md#3",
-        "E525_auto.md#4",
-        "E526_auto.md#0",
-        "E527_auto.md#0",
-        "E529_auto.md#0",
-        "E530_auto.md#0",
         "E531_auto.md#0",
-        "E533_auto.md#0",
-        "E534_unsupported_option.md#0",
         "E600_auto.md#0",
-        "E701_auto.md#0",
-        "E701_auto.md#1",
-        "E712_auto.md#0",
-        "E720_auto.md#0",
-        "E756_empty_user_defined_tier.md#0",
-        "E758_leading_space_on_main_tier.md#4",
     }
 
     def _enforced(self, error_specs):
@@ -780,7 +796,7 @@ class TestChatterErrorSpecs:
                 if not set(code_re.findall(str(e))) & set(spec.expected_codes):
                     wrong_code.add(spec.key)
         assert wrong_code == (
-            self.REPORTED_AS_MISALIGNMENT | self.OTHER_CODE_REPORTED_FIRST
+            self.REPORTED_AS_MISALIGNMENT | self.EXPECTED_CODE_NOT_REPORTED
         )
 
 

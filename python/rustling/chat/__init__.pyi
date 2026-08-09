@@ -174,6 +174,37 @@ class ChangeableHeader:
         value: str
         def __init__(self, value: str) -> None: ...
 
+class Diagnostic:
+    """A parse or validation problem reported by ``chatter``.
+
+    Available whether or not the data was loaded with ``strict=True``, so a
+    file that loaded leniently can still be inspected. Semantic validation
+    only runs under ``strict=True``, so a lenient load reports parse-level
+    diagnostics only.
+    """
+
+    @property
+    def code(self) -> str:
+        """``chatter``'s canonical error code, e.g. ``"E301"``."""
+
+    @property
+    def name(self) -> str:
+        """The rule's name, e.g. ``"MissingUTF8Header"``."""
+
+    @property
+    def is_error(self) -> bool:
+        """True for an error, false for a warning."""
+
+    @property
+    def message(self) -> str:
+        """``chatter``'s human-readable description of the problem."""
+
+    @property
+    def file_path(self) -> str:
+        """The file the diagnostic came from."""
+
+    def __repr__(self) -> str: ...
+
 class Gra:
     """A grammatical relation from the %gra tier."""
 
@@ -576,6 +607,20 @@ class CHAT:
 
         Returns:
             Number of loaded files.
+        """
+        ...
+
+    @property
+    def diagnostics(self) -> list[Diagnostic]:
+        """Diagnostics ``chatter`` reported for the loaded files.
+
+        Populated whether or not the data was loaded with ``strict=True``, so a
+        file that loaded leniently can still be inspected. Semantic validation
+        only runs under ``strict=True``, so a lenient load reports parse-level
+        diagnostics only.
+
+        Returns:
+            Every diagnostic, across all loaded files.
         """
         ...
 
@@ -1220,6 +1265,7 @@ __all__ = [
     "Age",
     "CHAT",
     "ChangeableHeader",
+    "Diagnostic",
     "Gra",
     "Headers",
     "Participant",

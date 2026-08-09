@@ -7,6 +7,8 @@
 //! [`Headers`]/[`Utterance`]/[`Token`] structures so the Python API is
 //! unchanged.
 
+#[cfg(feature = "pyo3")]
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::chat::header::{Age, ChangeableHeader, Headers, Media, Participant};
@@ -100,25 +102,76 @@ mod backend {
 // Public adapter surface
 // ---------------------------------------------------------------------------
 
-/// A parse/validation diagnostic surfaced by `chatter`, reduced to the fields
-/// rustling's strict-mode policy needs.
+/// A parse/validation diagnostic surfaced by `chatter`.
+///
+/// Exposed to Python as `Diagnostic` so a file loaded with `strict=False` can
+/// still be inspected: choosing to load a transcript leniently should not mean
+/// giving up the ability to find out what is wrong with it.
+#[cfg_attr(
+    feature = "pyo3",
+    pyclass(name = "Diagnostic", frozen, skip_from_py_object)
+)]
 #[derive(Clone, Debug)]
-pub(crate) struct ChatDiagnostic {
+pub struct ChatDiagnostic {
     /// chatter's canonical error code (e.g. `"E301"`). This is the identifier
     /// chatter's own error specs and documentation are keyed by, and it is
     /// stable across the variant renames the enum itself has seen.
-    pub(crate) code: String,
+    pub code: String,
     /// The `ErrorCode` variant name (e.g. `"MissingUTF8Header"`).
-    pub(crate) name: String,
+    pub name: String,
     /// Whether the diagnostic is an error (vs a warning).
-    pub(crate) is_error: bool,
+    pub is_error: bool,
     /// Whether this is the `%mor`/word count mismatch that rustling reports
     /// through its own misalignment channel (and so must not raise twice).
-    pub(crate) is_mor_word_mismatch: bool,
+    pub is_mor_word_mismatch: bool,
     /// Human-readable message from chatter.
-    pub(crate) message: String,
+    pub message: String,
     /// Source file path (filled by the caller; empty from the adapter).
-    pub(crate) file_path: String,
+    pub file_path: String,
+}
+
+#[cfg(feature = "pyo3")]
+#[pymethods]
+impl ChatDiagnostic {
+    /// chatter's canonical error code, e.g. `"E301"`.
+    #[getter]
+    fn code(&self) -> String {
+        self.code.clone()
+    }
+
+    /// The rule's name, e.g. `"MissingUTF8Header"`.
+    #[getter]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    /// True for an error, false for a warning.
+    #[getter]
+    fn is_error(&self) -> bool {
+        self.is_error
+    }
+
+    /// chatter's human-readable description of the problem.
+    #[getter]
+    fn message(&self) -> String {
+        self.message.clone()
+    }
+
+    /// The file the diagnostic came from.
+    #[getter]
+    fn file_path(&self) -> String {
+        self.file_path.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Diagnostic(code='{}', name='{}', is_error={}, file_path='{}')",
+            self.code,
+            self.name,
+            if self.is_error { "True" } else { "False" },
+            self.file_path
+        )
+    }
 }
 
 /// The result of adapting one chatter `ChatFile` into rustling structures.
@@ -134,8 +187,11 @@ pub(crate) struct Adapted {
 /// * `mor_key`/`gra_key` are the `%`-prefixed tier names to treat as the
 ///   morphology / grammatical-relation tiers (e.g. `Some("%mor")`), or `None`
 ///   to disable mor+gra handling.
-/// * When `validate` is true, chatter's semantic validation + alignment checks
-///   run and their diagnostics are returned (used only for `strict=True`).
+/// * `validate` requests chatter's semantic validation and alignment checks on
+///   top of the parse diagnostics, which are collected either way. Diagnostics
+///   are always returned rather than being thrown away outside strict mode:
+///   deciding to load a file leniently is not a reason to be unable to find out
+///   what is wrong with it.
 /// * `may_be_fragment` marks input from the string APIs, where a bare utterance
 ///   body is accepted and needs a synthetic header envelope to parse. Input
 ///   loaded from files is never wrapped, so a genuinely missing
@@ -158,8 +214,12 @@ pub(crate) fn parse_with_chatter(
     let chat_file = backend::parse(input, &parse_errors);
 
     let mut diagnostics = Vec::new();
+    // Parse diagnostics are already in hand: the collector is filled by the
+    // parse above whether or not anyone asked to validate, so keeping them
+    // costs nothing. Semantic validation is a second pass over the file and
+    // stays opt-in.
+    collect_diagnostics(&parse_errors.into_vec(), &mut diagnostics);
     if validate {
-        collect_diagnostics(&parse_errors.into_vec(), &mut diagnostics);
         let verrors = ErrorCollector::new();
         chat_file.validate(&verrors, None);
         collect_diagnostics(&verrors.into_vec(), &mut diagnostics);
@@ -243,11 +303,27 @@ fn map_chat_file(
     let mut misalignments = Vec::new();
     let mut seen_utterance = false;
 
+    // Only the span-less backends need rustling's own line blocks, so pay for
+    // them only there. One utterance carrying a real span means the parser
+    // records them for the whole file.
+    let has_spans = chat_file
+        .lines
+        .iter()
+        .any(|l| matches!(l, Line::Utterance(u) if !u.main.span.is_dummy()));
+    let blocks = if has_spans {
+        Vec::new()
+    } else {
+        source_blocks(input)
+    };
+    let mut utterance_index = 0;
+
     for line in chat_file.lines.iter() {
         match line {
             Line::Utterance(u) => {
                 seen_utterance = true;
-                let (utt, mis) = map_utterance(u, input, mor_key, gra_key);
+                let (utt, mis) =
+                    map_utterance(u, input, &blocks, utterance_index, mor_key, gra_key);
+                utterance_index += 1;
                 if let Some(m) = mis {
                     misalignments.push(m);
                 }
@@ -287,20 +363,18 @@ fn changeable_event(ch: ChangeableHeader) -> Utterance {
 fn map_utterance(
     u: &talkbank_model::Utterance,
     input: &str,
+    blocks: &[SourceBlock],
+    index: usize,
     mor_key: Option<&str>,
     gra_key: Option<&str>,
 ) -> (Utterance, Option<MisalignmentInfo>) {
     let participant = u.main.speaker.as_str().to_string();
 
-    // Verbatim tier text (keyed by participant + %tier), sliced from source.
+    // Verbatim tier text (keyed by participant + %tier).
     let mut tiers: HashMap<String, String> = HashMap::new();
-    let main_text = tier_content(slice(input, u.main.span));
+    let (main_text, dep_tiers) = verbatim_text(u, input, blocks, index);
     tiers.insert(participant.clone(), main_text.clone());
-    for dt in u.dependent_tiers.iter() {
-        if let Some((name, content)) = tier_name_and_content(slice(input, dt.span())) {
-            tiers.insert(name, content);
-        }
-    }
+    tiers.extend(dep_tiers);
 
     // chatter models only the utterance-final media bullet; transcripts also
     // carry mid-utterance bullets, so fall back to scanning the raw tier text
@@ -524,8 +598,95 @@ fn collect_words(items: &[UtteranceContent], out: &mut Vec<String>) {
 }
 
 // ---------------------------------------------------------------------------
-// Verbatim tier-text slicing
+// Verbatim tier text
 // ---------------------------------------------------------------------------
+
+/// One utterance's source lines: the main tier and its dependent tiers, with
+/// continuation lines folded back in.
+///
+/// This is rustling's own reading of the source, used only to display text that
+/// chatter's spans cannot reach. It never feeds the parser.
+#[derive(Default)]
+pub(crate) struct SourceBlock {
+    main: String,
+    tiers: Vec<(String, String)>,
+}
+
+/// Split the source into one [`SourceBlock`] per main tier, in file order.
+///
+/// Only built when the parser records no spans; see [`verbatim_text`].
+fn source_blocks(input: &str) -> Vec<SourceBlock> {
+    let mut blocks: Vec<SourceBlock> = Vec::new();
+    // Where a continuation line should be appended: the current block's main
+    // tier, or the last dependent tier opened on it.
+    let mut in_dependent = false;
+    for line in input.lines() {
+        if line.starts_with([' ', '\t']) {
+            let text = line.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if let Some(block) = blocks.last_mut() {
+                let target = match (in_dependent, block.tiers.last_mut()) {
+                    (true, Some((_, content))) => content,
+                    _ => &mut block.main,
+                };
+                target.push(' ');
+                target.push_str(text);
+            }
+            continue;
+        }
+        let line = line.trim_end();
+        if let Some(rest) = line.strip_prefix('*') {
+            in_dependent = false;
+            blocks.push(SourceBlock {
+                main: tier_content(rest),
+                tiers: Vec::new(),
+            });
+        } else if line.starts_with('%') {
+            in_dependent = true;
+            if let Some((name, content)) = tier_name_and_content(line)
+                && let Some(block) = blocks.last_mut()
+            {
+                block.tiers.push((name, content));
+            }
+        } else {
+            // A header or `@End`: the next continuation belongs to nothing we
+            // track, so stop appending to the previous utterance.
+            in_dependent = false;
+        }
+    }
+    blocks
+}
+
+/// Verbatim `(main tier text, dependent tiers)` for one utterance.
+///
+/// Read by slicing the source with chatter's spans where the parser records
+/// them. The re2c backend, which is what wasm/Pyodide builds use, records none
+/// at all -- its lexer produces spans and the parser discards them -- so every
+/// span is [`Span::is_dummy`] there and slicing yields `""`. Falling back to
+/// rustling's own line blocks keeps `annotated`, `audible` and `tiers`
+/// populated on both backends instead of only the native one.
+fn verbatim_text(
+    u: &talkbank_model::Utterance,
+    input: &str,
+    blocks: &[SourceBlock],
+    index: usize,
+) -> (String, Vec<(String, String)>) {
+    if !u.main.span.is_dummy() {
+        let main = tier_content(slice(input, u.main.span));
+        let deps = u
+            .dependent_tiers
+            .iter()
+            .filter_map(|dt| tier_name_and_content(slice(input, dt.span())))
+            .collect();
+        return (main, deps);
+    }
+    match blocks.get(index) {
+        Some(block) => (block.main.clone(), block.tiers.clone()),
+        None => (String::new(), Vec::new()),
+    }
+}
 
 fn slice(input: &str, span: talkbank_model::Span) -> &str {
     input.get(span.to_range()).unwrap_or("")

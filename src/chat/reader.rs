@@ -188,46 +188,37 @@ impl From<std::io::Error> for ChatError {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Normalize a CHAT source: trim each line, drop blanks, and fold continuation
-/// lines into the tier line they belong to.
+/// Prepare a CHAT source for `chatter`, changing as little as possible.
 ///
-/// A leading byte-order mark is stripped first: U+FEFF is not whitespace, so it
-/// would otherwise keep the opening `@UTF8` from being recognized as a header
-/// and drop the line entirely.
+/// This deliberately does almost nothing. rustling used to trim every line,
+/// drop blank lines and fold continuation lines into the tier line above,
+/// which made sense when rustling parsed CHAT itself but is now actively
+/// harmful: `chatter` understands the real line structure, and every
+/// transformation applied here is information it never gets to see. Folding
+/// continuations by first character corrupted a wrapped `@Comment` whose next
+/// line began with `@`, and dropping blank lines removed exactly what E747
+/// exists to report, so a rule that `chatter` implements could never fire.
 ///
-/// Continuation lines are identified by their leading whitespace, which CHAT
-/// requires (a wrapped tier or header line begins with a tab), and that test
-/// has to happen before the line is trimmed. Classifying the trimmed text by
-/// its first character instead would promote any continuation that happens to
-/// begin with `@`, `*` or `%` to a line of its own -- which a wrapped
-/// `@Comment` listing header names does, and chatter then reports the orphaned
-/// fragment as unparsable file-level content.
+/// Two normalizations are kept, both of which only ever remove noise:
 ///
-/// The file's common indent is removed first, so that a source indented as a
-/// whole (as hand-written CHAT fragments often are) is still read as ordinary
-/// lines rather than as one line and a run of continuations. Only indentation
-/// beyond what every line shares marks a continuation.
-fn normalized_text(chat_str: &str) -> String {
+/// * A leading byte-order mark. U+FEFF is not whitespace, so it would keep the
+///   opening `@UTF8` from being recognized as a header.
+/// * The file's common indent, so a source indented as a whole -- as
+///   hand-written CHAT fragments often are -- is still read as CHAT rather
+///   than as one long run of continuation lines. Indentation beyond the shared
+///   prefix is preserved, because that is what marks a real continuation.
+///
+/// Line endings are normalized to `\n` as a side effect of going through
+/// [`str::lines`].
+fn dedented_text(chat_str: &str) -> String {
     let chat_str = chat_str.strip_prefix('\u{feff}').unwrap_or(chat_str);
     let common = common_indent(chat_str);
     let mut out = String::with_capacity(chat_str.len());
-    for raw_line in chat_str.lines() {
-        let raw_line = raw_line.strip_prefix(common).unwrap_or(raw_line);
-        let indented = raw_line.starts_with([' ', '\t']);
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
+    for (i, line) in chat_str.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
         }
-        if !indented && line.starts_with(['*', '%', '@']) {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(line);
-        } else if !out.is_empty() {
-            // Continuation line: append to previous line.
-            out.push(' ');
-            out.push_str(line);
-        }
+        out.push_str(line.strip_prefix(common).unwrap_or(line));
     }
     out
 }
@@ -339,9 +330,11 @@ pub(crate) fn build_tokens(
 /// file-level headers are stored in the `Headers` struct.
 ///
 /// CHAT parsing is delegated to the official TalkBank `chatter` crates via
-/// [`crate::chat::from_chatter`]. `raw_lines` (the trimmed, continuation-joined
-/// source) is retained for verbatim serialization; the same text (wrapped in a
-/// minimal envelope when it is a bare fragment) is what `chatter` parses.
+/// [`crate::chat::from_chatter`]. `raw_lines` is the source as written, minus
+/// a byte-order mark and any indent shared by the whole file (see
+/// [`dedented_text`]); the same text, wrapped in a minimal envelope when it is
+/// a bare fragment, is what `chatter` parses. Keeping the two identical is what
+/// lets utterance text be recovered by slicing the source with chatter's spans.
 ///
 /// `validate` requests chatter's semantic validation (used for `strict=True`);
 /// the resulting diagnostics are returned as the fifth tuple element.
@@ -368,7 +361,7 @@ fn parse_chat_str(
     };
     // The normalized text is built once and `raw_lines` is derived from it, so
     // the transcript body is copied once rather than per line and again to join.
-    let file_text = normalized_text(chat_str);
+    let file_text = dedented_text(chat_str);
     let raw_lines = file_text.lines().map(str::to_string).collect();
     let adapted = crate::chat::from_chatter::parse_with_chatter(
         &file_text,
@@ -1534,9 +1527,30 @@ mod tests {
     }
 
     fn get_lines(chat_str: &str) -> Vec<String> {
-        normalized_text(chat_str)
+        dedented_text(chat_str)
             .lines()
             .map(str::to_string)
+            .collect()
+    }
+
+    /// Parse a whole transcript with chatter's validation on, returning the
+    /// utterances and the error-severity diagnostics.
+    fn parse_validated(chat_str: &str) -> (Vec<Utterance>, Vec<String>) {
+        let (_, events, _, _, diags) =
+            super::parse_chat_str(chat_str, DEFAULT_MOR, DEFAULT_GRA, true, false);
+        let errors = diags
+            .iter()
+            .filter(|d| d.is_error)
+            .map(|d| format!("{} {}", d.code, d.name))
+            .collect();
+        (events, errors)
+    }
+
+    fn words_of(utterances: &[Utterance], participant: &str) -> Vec<String> {
+        utterances
+            .iter()
+            .filter(|u| u.participant.as_deref() == Some(participant))
+            .flat_map(|u| u.tokens.iter().flatten().map(|t| t.word.clone()))
             .collect()
     }
 
@@ -1555,11 +1569,18 @@ mod tests {
         assert!(!non_empty_file.is_empty());
     }
 
+    /// A wrapped main tier is joined by chatter, not by rustling: the
+    /// continuation line reaches the parser intact, tab and all.
     #[test]
-    fn test_get_lines_joins_continuations() {
-        let input = "@Begin\n*CHI:\tI want\n\tcookie .\n@End\n";
+    fn test_continuation_line_is_left_for_chatter() {
+        let input = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n@ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n*CHI:\tI want\n\tcookie .\n@End\n";
+        // The source is handed over unfolded ...
         let lines = get_lines(input);
-        assert!(lines.iter().any(|l| l.contains("I want cookie .")));
+        assert!(lines.iter().any(|l| l == "\tcookie ."));
+        // ... and chatter still reads it as one utterance.
+        let (utterances, errors) = parse_validated(input);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+        assert_eq!(words_of(&utterances, "CHI"), ["I", "want", "cookie", "."]);
     }
 
     #[test]
@@ -1574,32 +1595,41 @@ mod tests {
     }
 
     /// A continuation line may itself begin with `@`, `*` or `%` -- a wrapped
-    /// `@Comment` listing header names does. It is the leading tab, not the
-    /// first character, that makes it a continuation, and promoting it to its
-    /// own line leaves chatter an orphaned fragment it reports as unparsable
+    /// `@Comment` listing header names does. rustling used to classify lines by
+    /// first character after trimming, which promoted such a line to a header of
+    /// its own and left chatter an orphaned fragment to report as unparsable
     /// file-level content.
     #[test]
-    fn test_get_lines_folds_continuation_starting_with_at_sign() {
-        let input = "@Begin\n@Comment:\tMetadata headers: @Date,\n\t@Transcriber, @Transcription\n*CHI:\thi .\n@End\n";
-        let lines = get_lines(input);
-        assert_eq!(lines.len(), 4);
-        assert_eq!(
-            lines[1],
-            "@Comment:\tMetadata headers: @Date, @Transcriber, @Transcription"
-        );
-        assert!(lines[2].starts_with("*CHI:"));
+    fn test_continuation_starting_with_at_sign_is_not_split_off() {
+        let input = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n@ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n@Comment:\tMetadata headers: @Date,\n\t@Transcriber, @Transcription\n*CHI:\thi .\n@End\n";
+        let (utterances, errors) = parse_validated(input);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+        assert_eq!(words_of(&utterances, "CHI"), ["hi", "."]);
     }
 
-    /// The whole-file indent is removed before continuations are looked for, so
-    /// a uniformly indented source keeps its line structure while a line
-    /// indented beyond that shared prefix still folds.
+    /// The indent shared by every line is removed, so a source indented as a
+    /// whole still parses. Indentation beyond that shared prefix is left alone,
+    /// because that is what marks a genuine continuation.
     #[test]
-    fn test_get_lines_indented_file_with_continuation() {
-        let input = "  @Begin\n  @Comment:\tone\n  \ttwo\n  *CHI:\thi .\n  @End\n";
+    fn test_uniformly_indented_source_with_continuation() {
+        let input = "  @UTF8\n  @Begin\n  @Languages:\teng\n  @Participants:\tCHI Target_Child\n  @ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n  @Comment:\tone\n  \ttwo\n  *CHI:\thi .\n  @End\n";
         let lines = get_lines(input);
-        assert_eq!(lines.len(), 4);
-        assert_eq!(lines[1], "@Comment:\tone two");
-        assert!(lines[2].starts_with("*CHI:"));
+        assert_eq!(lines[0], "@UTF8");
+        assert_eq!(lines[6], "\ttwo");
+        let (utterances, errors) = parse_validated(input);
+        assert!(errors.is_empty(), "unexpected diagnostics: {errors:?}");
+        assert_eq!(words_of(&utterances, "CHI"), ["hi", "."]);
+    }
+
+    /// Blank lines are no longer stripped, so chatter can report E747 on them.
+    #[test]
+    fn test_blank_line_reaches_chatter() {
+        let input = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n@ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n*CHI:\thi .\n\n@End\n";
+        let (_, errors) = parse_validated(input);
+        assert!(
+            errors.iter().any(|e| e.starts_with("E747")),
+            "expected E747, got {errors:?}"
+        );
     }
 
     #[test]
