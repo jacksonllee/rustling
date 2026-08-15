@@ -15,6 +15,7 @@ use crate::chat::header::{Age, ChangeableHeader, Headers, Media, Participant};
 use crate::chat::reader::{MisalignmentCounts, MisalignmentInfo, MorItem, build_tokens};
 use crate::chat::utterance::{Gra, Utterance};
 
+use talkbank_model::model::TranscriptName;
 use talkbank_model::{
     AgeValue, ChatFile as TbChatFile, DependentTier, ErrorCode, ErrorCollector, GraTier, Header,
     Line, MorTier, MorWord, ParseError, ReplacedWord, Separator, Severity, TierDomain,
@@ -196,6 +197,11 @@ pub(crate) struct Adapted {
 ///   body is accepted and needs a synthetic header envelope to parse. Input
 ///   loaded from files is never wrapped, so a genuinely missing
 ///   `@UTF8`/`@Begin` header is reported as itself.
+/// * `source_path` is the path the text was read from, when there is one. It
+///   names the transcript for the validation rules that are about a
+///   transcript's own name -- E531, which requires `@Media`'s filename to match
+///   it. `None` means the input genuinely has no file name, which is the case
+///   for the string APIs.
 ///
 /// Misalignment detection (word count vs non-clitic mor count) is always
 /// performed and returned via `misalignments`, independent of `validate`.
@@ -205,6 +211,7 @@ pub(crate) fn parse_with_chatter(
     gra_key: Option<&str>,
     validate: bool,
     may_be_fragment: bool,
+    source_path: Option<&str>,
 ) -> Adapted {
     let wrapped =
         (may_be_fragment && !looks_like_transcript(file_text)).then(|| wrap_fragment(file_text));
@@ -221,7 +228,13 @@ pub(crate) fn parse_with_chatter(
     collect_diagnostics(&parse_errors.into_vec(), &mut diagnostics);
     if validate {
         let verrors = ErrorCollector::new();
-        chat_file.validate(&verrors, None);
+        // `Anonymous` is a deliberate answer rather than a missing one: it
+        // turns off the rules about the transcript's own name. File input has
+        // a name and says so; string input genuinely has none.
+        let name = source_path.map_or(TranscriptName::Anonymous, |p| {
+            TranscriptName::for_path(std::path::Path::new(p))
+        });
+        chat_file.validate(&verrors, name);
         collect_diagnostics(&verrors.into_vec(), &mut diagnostics);
         collect_diagnostics(&chat_file.validate_alignments(), &mut diagnostics);
     }
@@ -972,7 +985,7 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> Adapted {
-        parse_with_chatter(text, Some("%mor"), Some("%gra"), false, true)
+        parse_with_chatter(text, Some("%mor"), Some("%gra"), false, true, None)
     }
 
     const BASIC: &str = "@UTF8\n@Begin\n@Languages:\teng\n\
@@ -1054,7 +1067,7 @@ mod tests {
             @ID:\teng|test|CHI|||||Target_Child|||\n\
             *CHI:\tI want cookie .\n%xmor:\tpro|I v|want n|cookie .\n\
             %xgra:\t1|2|SUBJ 2|0|ROOT 3|2|OBJ 4|2|PUNCT\n@End\n";
-        let a = parse_with_chatter(text, Some("%xmor"), Some("%xgra"), false, true);
+        let a = parse_with_chatter(text, Some("%xmor"), Some("%xgra"), false, true, None);
         let tokens = a.events[0].tokens.as_ref().unwrap();
         assert_eq!(tokens[0].pos.as_deref(), Some("pro"));
         assert_eq!(tokens[0].gra.as_ref().unwrap().rel, "SUBJ");

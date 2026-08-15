@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.10.0`).
+  pinned as a git dependency (tag `v0.11.0`).
   Since crates.io doesn't allow git dependencies, this branch using `chatter`
   won't be merged in the Rustling's `main` branch for release yet --
   we need to wait for `chatter`'s crates to be available on crates.io.
@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `@ID`), which the bare utterance fragments `from_strs` is designed to
   accept can never satisfy. Use `CHAT.from_files` / `CHAT.from_dir` with
   `strict=True` to validate complete transcripts.
+- `strict=True` file loading now reports E531, which requires the `@Media`
+  header's filename to match the transcript's own name: `foo.cha` carrying
+  `@Media: bar, audio` is rejected. rustling previously validated without
+  telling `chatter` what the transcript was called, which switched off every
+  rule about a transcript's own name. `CHAT.from_strs` is unaffected -- string
+  input has no file name, so those rules correctly do not run there.
 - Word-to-`%mor` alignment now follows `chatter`'s own alignment rules, so the
   words rustling counts are exactly the words `chatter` expects a `%mor` item
   for. This affects utterances containing `[e]`-excluded material, phonological

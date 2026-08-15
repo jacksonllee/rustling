@@ -339,13 +339,16 @@ pub(crate) fn build_tokens(
 /// `validate` requests chatter's semantic validation (used for `strict=True`);
 /// the resulting diagnostics are returned as the fifth tuple element.
 /// `may_be_fragment` is set for the string APIs, which accept bare utterance
-/// bodies; file input is never treated as a fragment.
+/// bodies; file input is never treated as a fragment. `source_path` names the
+/// transcript for chatter's rules about a transcript's own name, and is `None`
+/// for the same string APIs, whose input has no file name.
 fn parse_chat_str(
     chat_str: &str,
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
     validate: bool,
     may_be_fragment: bool,
+    source_path: Option<&str>,
 ) -> (
     Headers,
     Vec<Utterance>,
@@ -369,6 +372,7 @@ fn parse_chat_str(
         gra_tier,
         validate,
         may_be_fragment,
+        source_path,
     );
     (
         adapted.headers,
@@ -443,8 +447,10 @@ pub(crate) fn parse_chat_strs(
 ) -> (Vec<ChatFile>, Vec<MisalignmentInfo>) {
     let build = |content: &str, id: &str| {
         // String input may be a bare utterance fragment, so allow the envelope.
+        // It is also anonymous: `id` is a caller-chosen label rather than a
+        // file name, so the rules about a transcript's own name do not apply.
         let (headers, events, raw_lines, mut mis, mut diags) =
-            parse_chat_str(content, mor_tier, gra_tier, validate, true);
+            parse_chat_str(content, mor_tier, gra_tier, validate, true, None);
         for m in &mut mis {
             m.file_path = id.to_string();
         }
@@ -490,7 +496,7 @@ pub(crate) fn load_chat_files(
         // A file is a whole transcript: never wrap, so a missing `@UTF8` or
         // `@Begin` is reported as itself rather than as a duplicated envelope.
         let (headers, events, raw_lines, mut mis, mut diags) =
-            parse_chat_str(&content, mor_tier, gra_tier, validate, false);
+            parse_chat_str(&content, mor_tier, gra_tier, validate, false, Some(path));
         for m in &mut mis {
             m.file_path = path.to_string();
         }
@@ -1511,18 +1517,20 @@ mod tests {
     use std::collections::HashMap;
 
     /// Test shim: the internal `parse_chat_str` gained a `validate` flag, a
-    /// `may_be_fragment` flag and a diagnostics return value, and dropped the
-    /// unused `parallel` flag; these legacy tests use the 4-arg / 4-tuple form.
-    /// Shadow it with `validate = false` (validation is exercised via the
-    /// Python `strict=True` tests instead) and fragment wrapping enabled, which
-    /// is how the string APIs call it.
+    /// `may_be_fragment` flag, a `source_path` and a diagnostics return value,
+    /// and dropped the unused `parallel` flag; these legacy tests use the
+    /// 4-arg / 4-tuple form. Shadow it with `validate = false` (validation is
+    /// exercised via the Python `strict=True` tests instead), fragment
+    /// wrapping enabled and no source path, which is how the string APIs call
+    /// it.
     fn parse_chat_str(
         chat_str: &str,
         _parallel: bool,
         mor_tier: Option<&str>,
         gra_tier: Option<&str>,
     ) -> (Headers, Vec<Utterance>, Vec<String>, Vec<MisalignmentInfo>) {
-        let (h, e, l, m, _) = super::parse_chat_str(chat_str, mor_tier, gra_tier, false, true);
+        let (h, e, l, m, _) =
+            super::parse_chat_str(chat_str, mor_tier, gra_tier, false, true, None);
         (h, e, l, m)
     }
 
@@ -1536,8 +1544,9 @@ mod tests {
     /// Parse a whole transcript with chatter's validation on, returning the
     /// utterances and the error-severity diagnostics.
     fn parse_validated(chat_str: &str) -> (Vec<Utterance>, Vec<String>) {
+        // Anonymous: these fixtures are string literals, not files on disk.
         let (_, events, _, _, diags) =
-            super::parse_chat_str(chat_str, DEFAULT_MOR, DEFAULT_GRA, true, false);
+            super::parse_chat_str(chat_str, DEFAULT_MOR, DEFAULT_GRA, true, false, None);
         let errors = diags
             .iter()
             .filter(|d| d.is_error)

@@ -731,7 +731,6 @@ class TestChatterErrorSpecs:
         "E603_invalid_tim_tier_format.md#0",
         # chatter emits no diagnostic at all for these, on the raw spec text,
         # despite the spec declaring the rule implemented.
-        "E552_media_unlinked_with_timing.md#1",
         "E725_modsyl_mod_count_mismatch.md#0",
         "E726_phosyl_pho_count_mismatch.md#0",
         "E727_phoaln_mod_count_mismatch.md#0",
@@ -759,8 +758,15 @@ class TestChatterErrorSpecs:
     # than the spec expects.
     EXPECTED_CODE_NOT_REPORTED = {
         "E502_wor_cascade_regression.md#0",
-        "E531_auto.md#0",
         "E600_auto.md#0",
+        # chatter still emits no E552 for this example (it was in
+        # NO_ERROR_RAISED until chatter v0.11.0). It is rejected now only
+        # because `_load` names the file `spec_N.cha` while the fixture
+        # declares `@Media: session-01`, and rustling started passing the
+        # transcript's name to chatter's validator at v0.11.0, which is what
+        # enables E531. The spec declares no `**Source**` line, so chatter's
+        # own example runner validates it anonymously and never reaches E531.
+        "E552_media_unlinked_with_timing.md#1",
     }
 
     def _enforced(self, error_specs):
@@ -768,6 +774,9 @@ class TestChatterErrorSpecs:
 
     @staticmethod
     def _load(spec, tmp_path, index):
+        # The file name is not incidental: from_files hands it to chatter as
+        # the transcript's name, so a fixture whose `@Media` header names
+        # something else trips E531 on top of the rule it was written for.
         path = tmp_path / f"spec_{index}.cha"
         path.write_text(spec.chat)
         CHAT.from_files([str(path)], strict=True)
