@@ -403,10 +403,13 @@ fn split_trailing_punct(words: &mut Vec<String>) {
 /// Escape words that are dropped even in the audible view.
 ///
 /// Unidentifiable material (`xxx`, `yyy`, `www` and their suffixed variants) is
-/// deliberately absent: it was audible, so it is kept.
+/// deliberately absent: it was audible, so it is kept. The two-letter forms
+/// `ww`, `xx` and `yy` are here instead: chatter's E241 derives the illegal
+/// spellings from that canonical set, so none of the three is a transcribed
+/// word to keep.
 static AUDIBLE_ESCAPE_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "0", "++", "+<", "+^", "(.)", "(..)", "(...)", ":", ";", ";;", "<", ">", "xx", "yy",
+        "0", "++", "+<", "+^", "(.)", "(..)", "(...)", ":", ";", ";;", "<", ">", "ww", "xx", "yy",
         "\u{2192}", // →
     ]
     .into_iter()
@@ -602,7 +605,9 @@ mod tests {
 
     #[test]
     fn test_audible_drops_xx() {
-        // xx and yy are still escape words in audible mode.
+        // ww, xx and yy are still escape words in audible mode -- they are the
+        // illegal short spellings of www/xxx/yyy, not transcribed words.
+        assert_eq!(audible_utterance("ww ."), ".");
         assert_eq!(audible_utterance("xx ."), ".");
         assert_eq!(audible_utterance("yy ."), ".");
     }

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`chatter`](https://github.com/TalkBank/chatter) crates (`talkbank-model` +
   `talkbank-parser`) instead of rustling's own hand-written parser. The Python
   API is unchanged. Because `chatter` is not yet published to crates.io, it is
-  pinned as a git dependency (tag `v0.11.0`).
+  pinned as a git dependency (tag `v0.12.0`).
   Since crates.io doesn't allow git dependencies, this branch using `chatter`
   won't be merged in the Rustling's `main` branch for release yet --
   we need to wait for `chatter`'s crates to be available on crates.io.
@@ -33,6 +33,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   telling `chatter` what the transcript was called, which switched off every
   rule about a transcript's own name. `CHAT.from_strs` is unaffected -- string
   input has no file name, so those rules correctly do not run there.
+- `strict=True` file loading rejects three kinds of transcript that `chatter`
+  used to accept in silence, because `chatter` v0.12.0 made the corresponding
+  rules report. A corpus that loaded cleanly under the previous pin may not
+  load now.
+  - E241 covers the illegal spellings of the untranscribed markers. `www`,
+    `xxx` and `yyy` are the canonical forms, and the wrong spellings are now
+    derived from them rather than listed, so `ww` is caught alongside the `xx`
+    and `yy` that already were, as are miscased forms such as `Www` and `XX`.
+  - E756 covers every dependent tier whose body is free text, not only `%x…`
+    ones. A tier line with an empty or whitespace-only payload declares
+    nothing, so `%eng:` and `%tim:` with no content are rejected the way
+    `%xtst:` already was.
+  - A file declaring an empty `@Participants` set is no longer exempt from the
+    participants check. The empty declaration used to switch the check off, so
+    the files least likely to be well formed were the ones that escaped it;
+    speakers such a file goes on to use are now reported (E522).
+- `Utterance.audible` drops `ww` as well as `xx` and `yy`. All three are
+  illegal short spellings of the untranscribed markers rather than transcribed
+  words, and `ww` was missing from the list for the same reason `chatter` used
+  to miss it: the spellings were enumerated instead of derived. `www`, `xxx`
+  and `yyy` are still kept -- that material was audible.
 - Word-to-`%mor` alignment now follows `chatter`'s own alignment rules, so the
   words rustling counts are exactly the words `chatter` expects a `%mor` item
   for. This affects utterances containing `[e]`-excluded material, phonological
@@ -40,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Participant.language` keeps every code declared in a multi-language `@ID`
   field (e.g. `"yue,eng"`) instead of only the first.
 - Strict-mode error messages now carry `chatter`'s canonical error code
-  alongside the variant name (e.g. `[E301 MissingTerminator]` where they
+  alongside the variant name (e.g. `[E305 MissingTerminator]` where they
   previously read `[MissingTerminator]`). The code is the identifier
   `chatter`'s error specs and documentation are keyed by, and it is stable
   across the enum renames the variant names have seen.
@@ -99,10 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pos`/`mor` on its tokens. The raw tier text is still available from
   `Utterance.tiers`. Postclitics (`~`) are unaffected.
 - Some checks the previous hand-written validator performed have no `chatter`
-  equivalent yet, so `strict=True` no longer flags them: `@Media` name vs.
-  file name mismatches, tone terminators, invalid language codes, and
-  zero-word forms. Validation is stricter overall (see above), but these
-  specific checks were lost.
+  equivalent yet, so `strict=True` no longer flags them: tone terminators,
+  invalid language codes, and zero-word forms. Validation is stricter overall
+  (see above), but these specific checks were lost. `@Media` name vs. file name
+  mismatches were on this list too until `chatter` v0.11.0; they are checked
+  again, as E531.
 - The `[x N]` repetition marker is not yet implemented by `chatter`'s grammar,
   so `strict=True` rejects files containing it and lenient parsing degrades the
   affected utterance's word tokens (the marker's content can surface as word
