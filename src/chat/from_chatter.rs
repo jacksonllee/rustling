@@ -465,13 +465,19 @@ fn find_mor_items(
     mor_key: Option<&str>,
     errors: &ErrorCollector,
 ) -> Option<Vec<MorItem>> {
+    // The terminator item pairs with the terminator word `map_utterance`
+    // appends to `words`, and that word is only appended when the main tier
+    // actually carries one. chatter's `MorTier::terminator` is not optional, so
+    // an utterance written without a terminator would otherwise get a mor item
+    // with no word to match and come out one too long on every count.
+    let with_terminator = u.main.content.terminator.is_some();
     match find_tier(u, mor_key)? {
-        DependentTier::Mor(m) => Some(mor_items_from_tier(m)),
+        DependentTier::Mor(m) => Some(mor_items_from_tier(m, with_terminator)),
         DependentTier::UserDefined(t) | DependentTier::Unsupported(t) => {
             // `content` is `Option` as of chatter v0.9.0: a `%x` line that
             // declared a tier and gave it nothing has no items to parse.
             backend::parse_mor(t.content.as_ref()?.as_str(), errors)
-                .map(|tier| mor_items_from_tier(&tier))
+                .map(|tier| mor_items_from_tier(&tier, with_terminator))
         }
         _ => None,
     }
@@ -497,7 +503,10 @@ fn find_gra_items(
 /// each `Mor` contributes its main word (non-clitic) then its post-clitics
 /// (clitic), and a final non-clitic item carries the tier terminator so the
 /// count matches the trailing terminator word in `words`.
-fn mor_items_from_tier(tier: &MorTier) -> Vec<MorItem> {
+///
+/// `with_terminator` is false when the utterance's main tier has no terminator
+/// and so contributes no terminator word for that item to pair with.
+fn mor_items_from_tier(tier: &MorTier, with_terminator: bool) -> Vec<MorItem> {
     let mut items = Vec::new();
     for mor in tier.items() {
         let (pos, m) = render_mor(&mor.main);
@@ -515,11 +524,13 @@ fn mor_items_from_tier(tier: &MorTier) -> Vec<MorItem> {
             });
         }
     }
-    items.push(MorItem {
-        pos: String::new(),
-        mor: tier.terminator.to_string(),
-        is_clitic: false,
-    });
+    if with_terminator {
+        items.push(MorItem {
+            pos: String::new(),
+            mor: tier.terminator.to_string(),
+            is_clitic: false,
+        });
+    }
     items
 }
 
@@ -625,14 +636,22 @@ pub(crate) struct SourceBlock {
     tiers: Vec<(String, String)>,
 }
 
+/// Where a continuation line belongs: the tier the most recent non-indented
+/// line opened, or nothing at all when that line was one this reading does not
+/// track (a header or `@End`).
+#[derive(Clone, Copy)]
+enum Continuation {
+    Main,
+    Dependent,
+    Untracked,
+}
+
 /// Split the source into one [`SourceBlock`] per main tier, in file order.
 ///
 /// Only built when the parser records no spans; see [`verbatim_text`].
 fn source_blocks(input: &str) -> Vec<SourceBlock> {
     let mut blocks: Vec<SourceBlock> = Vec::new();
-    // Where a continuation line should be appended: the current block's main
-    // tier, or the last dependent tier opened on it.
-    let mut in_dependent = false;
+    let mut continuation = Continuation::Untracked;
     for line in input.lines() {
         if line.starts_with([' ', '\t']) {
             let text = line.trim();
@@ -640,33 +659,40 @@ fn source_blocks(input: &str) -> Vec<SourceBlock> {
                 continue;
             }
             if let Some(block) = blocks.last_mut() {
-                let target = match (in_dependent, block.tiers.last_mut()) {
-                    (true, Some((_, content))) => content,
-                    _ => &mut block.main,
+                let target = match continuation {
+                    Continuation::Main => Some(&mut block.main),
+                    Continuation::Dependent => block.tiers.last_mut().map(|(_, content)| content),
+                    Continuation::Untracked => None,
                 };
-                target.push(' ');
-                target.push_str(text);
+                if let Some(target) = target {
+                    target.push(' ');
+                    target.push_str(text);
+                }
             }
             continue;
         }
         let line = line.trim_end();
         if let Some(rest) = line.strip_prefix('*') {
-            in_dependent = false;
+            continuation = Continuation::Main;
             blocks.push(SourceBlock {
                 main: tier_content(rest),
                 tiers: Vec::new(),
             });
         } else if line.starts_with('%') {
-            in_dependent = true;
+            // Only a tier that was actually opened can take a continuation:
+            // otherwise the text would land on whichever tier came before.
+            continuation = Continuation::Untracked;
             if let Some((name, content)) = tier_name_and_content(line)
                 && let Some(block) = blocks.last_mut()
             {
                 block.tiers.push((name, content));
+                continuation = Continuation::Dependent;
             }
         } else {
-            // A header or `@End`: the next continuation belongs to nothing we
-            // track, so stop appending to the previous utterance.
-            in_dependent = false;
+            // A header or `@End`. Its own continuation lines belong to it, not
+            // to the utterance above, which is where they used to be appended:
+            // a wrapped `@Comment` surfaced as speech on the previous *tier.
+            continuation = Continuation::Untracked;
         }
     }
     blocks
@@ -717,18 +743,37 @@ fn first_time_mark(text: &str) -> Option<(i64, i64)> {
     Some((start.trim().parse().ok()?, end.trim().parse().ok()?))
 }
 
+/// Trim a raw tier slice and fold its continuation lines into single spaces.
+///
+/// CHAT wraps a long tier by starting the next line with a tab, so a slice cut
+/// from the source with chatter's span carries that newline and indent
+/// verbatim. `annotated`, `audible` and the `tiers` map are all single-line
+/// views of a tier, and the writers reading them treat a newline as a record
+/// boundary -- an embedded one splits an SRT subtitle in two and terminates a
+/// TextGrid quoted string early. [`source_blocks`], the fallback used where the
+/// parser records no spans, folds the same way, so both backends agree.
+fn fold_continuations(raw: &str) -> String {
+    if !raw.contains('\n') {
+        return raw.trim().to_string();
+    }
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Extract the content after `*CODE:` / `%tier:` from a raw tier line slice.
 fn tier_content(raw: &str) -> String {
     raw.split_once(':')
-        .map(|(_, rest)| rest.trim())
-        .unwrap_or("")
-        .to_string()
+        .map(|(_, rest)| fold_continuations(rest))
+        .unwrap_or_default()
 }
 
 /// Split a raw dependent-tier line slice into (`%name`, content).
 fn tier_name_and_content(raw: &str) -> Option<(String, String)> {
     let (name, content) = raw.split_once(':')?;
-    Some((name.trim().to_string(), content.trim().to_string()))
+    Some((name.trim().to_string(), fold_continuations(content)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,5 +1177,68 @@ mod tests {
         assert_eq!(words, ["no", "."]);
         assert!(tokens[0].pos.is_none());
         assert!(tokens[0].mor.is_none());
+    }
+
+    /// A main tier without a terminator contributes no terminator word, so the
+    /// `%mor` tier must not contribute a terminator item either. chatter's
+    /// `MorTier::terminator` is not optional, so the item used to be appended
+    /// unconditionally and every such utterance came out one mor item long --
+    /// reported as a misalignment chatter itself does not see, and emptying the
+    /// tokens under `strict=False`. chatter reports the real fault (E305) on
+    /// its own.
+    #[test]
+    fn missing_main_terminator_does_not_inflate_mor_count() {
+        let text = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n\
+            @ID:\teng|test|CHI|||||Target_Child|||\n\
+            *CHI:\tI want cookie\n%mor:\tpro|I v|want n|cookie .\n@End\n";
+        let a = parse(text);
+        let tokens = a.events[0].tokens.as_ref().unwrap();
+        let words: Vec<&str> = tokens.iter().map(|t| t.word.as_str()).collect();
+        assert_eq!(words, ["I", "want", "cookie"]);
+        assert_eq!(tokens[2].pos.as_deref(), Some("n"));
+        assert!(a.misalignments.is_empty());
+    }
+
+    /// A tier wrapped over several source lines is a single-line view once
+    /// read. The span cut from the source carries the newline and the tab that
+    /// continues the tier, and a newline reaching `annotated`/`tiers` splits an
+    /// SRT subtitle and terminates a TextGrid quoted string early.
+    #[test]
+    fn wrapped_tier_lines_are_folded() {
+        let text = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n\
+            @ID:\teng|test|CHI|||||Target_Child|||\n\
+            *CHI:\tI want\n\ta cookie .\n%com:\tsaid while\n\tpointing .\n@End\n";
+        let a = parse(text);
+        let u = &a.events[0];
+        assert_eq!(u.annotated().as_deref(), Some("I want a cookie ."));
+        let tiers = u.tiers.as_ref().unwrap();
+        assert_eq!(
+            tiers.get("CHI").map(String::as_str),
+            Some("I want a cookie .")
+        );
+        assert_eq!(
+            tiers.get("%com").map(String::as_str),
+            Some("said while pointing .")
+        );
+        for text in tiers.values() {
+            assert!(!text.contains('\n'), "tier text kept a newline: {text:?}");
+        }
+    }
+
+    /// The span-less fallback reads the source by line. A continuation line
+    /// belongs to the tier above it, and a header's continuation belongs to the
+    /// header -- not to the last utterance, where it used to be appended and
+    /// surfaced as speech.
+    #[test]
+    fn source_blocks_ignore_header_continuations() {
+        let input = "@UTF8\n@Begin\n*CHI:\tI want\n\ta cookie .\n%com:\tpointing\n\tat it .\n\
+            @Comment:\tlong note\n\tcontinued here\n@End\n";
+        let blocks = source_blocks(input);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].main, "I want a cookie .");
+        assert_eq!(
+            blocks[0].tiers,
+            vec![("%com".to_string(), "pointing at it .".to_string())]
+        );
     }
 }

@@ -162,19 +162,27 @@ fn handle_problems(
     misalignments: &[MisalignmentInfo],
     strict: bool,
     report_diagnostics: bool,
+    mor_key: Option<&str>,
     py: Python<'_>,
 ) -> PyResult<()> {
     if !strict {
         return warn_misalignments(misalignments, py);
     }
 
+    // chatter's count mismatches are about `%mor`; rustling's misalignment
+    // channel is about whichever tier the caller selected. They only cover the
+    // same ground when that tier is `%mor`, which is the default but not the
+    // only option: with `mor_tier=None` or a `%x…` tier, rustling counts
+    // nothing about `%mor` and dropping chatter's diagnostic would leave the
+    // mismatch reported by nobody.
+    let misalignment_covers_mor = mor_key == Some("%mor");
     let mut problems: Vec<Problem> = Vec::new();
     if report_diagnostics {
         for file in chat.files() {
             for d in &file.diagnostics {
                 // `%mor`/word count mismatches belong to the misalignment
                 // channel, which reports them with the tier text alongside.
-                if !d.is_error || d.is_mor_word_mismatch {
+                if !d.is_error || (d.is_mor_word_mismatch && misalignment_covers_mor) {
                     continue;
                 }
                 problems.push(Problem {
@@ -629,7 +637,7 @@ impl PyChat {
             gra_key.as_deref(),
             false,
         );
-        handle_problems(&chat, &misalignments, strict, false, py)?;
+        handle_problems(&chat, &misalignments, strict, false, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -679,7 +687,7 @@ impl PyChat {
             strict,
         )
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        handle_problems(&chat, &misalignments, strict, true, py)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -716,7 +724,7 @@ impl PyChat {
             strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_problems(&chat, &misalignments, strict, true, py)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -753,7 +761,7 @@ impl PyChat {
             strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_problems(&chat, &misalignments, strict, true, py)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -797,7 +805,7 @@ impl PyChat {
             strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_problems(&chat, &misalignments, strict, true, py)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -837,7 +845,7 @@ impl PyChat {
             strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_problems(&chat, &misalignments, strict, true, py)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);

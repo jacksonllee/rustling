@@ -702,6 +702,29 @@ class TestProblemReporting:
         reader = CHAT.from_files(reference_corpus_files[:5], strict=True)
         assert reader.diagnostics == []
 
+    # A %mor count mismatch is normally reported through rustling's own
+    # misalignment channel, so chatter's E705/E706 is suppressed to avoid
+    # naming it twice. That channel only counts the tier the caller selected,
+    # so pointing it away from %mor -- or switching it off -- used to leave the
+    # mismatch reported by nobody and the file silently accepted.
+    @pytest.mark.parametrize("mor_tier", [None, "%zzz"])
+    def test_mor_mismatch_still_reported_when_channel_is_elsewhere(
+        self, tmp_path, mor_tier
+    ):
+        path = self._write(tmp_path, self.TWO_FAULTS)
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([path], strict=True, mor_tier=mor_tier)
+        assert re.search(r"E70[56]", str(excinfo.value)), str(excinfo.value)
+
+    def test_mor_mismatch_not_reported_twice_by_default(self, tmp_path):
+        """The default %mor selection still routes through misalignment only."""
+        path = self._write(tmp_path, self.TWO_FAULTS)
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([path], strict=True)
+        message = str(excinfo.value)
+        assert "misalignment" in message
+        assert not re.search(r"E70[56]", message), message
+
 
 class TestChatterErrorSpecs:
     """strict=True must reject the invalid CHAT that chatter's specs describe.
