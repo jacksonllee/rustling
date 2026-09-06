@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `strict=True` to validate complete transcripts.
 - `Participant.language` keeps every code declared in a multi-language `@ID`
   field (e.g. `"yue,eng"`) instead of only the first.
+- `CHAT.from_url` pointed at a single transcript now reads it as the whole file
+  it is rather than as a possible fragment, so `strict=True` validates it the
+  way `CHAT.from_files` would, and its `file_path` is the transcript's name
+  from the URL rather than a generated UUID. The same parity applies to
+  `CHAT.from_zip`, where the entry name is the transcript's name: both now
+  report the missing-envelope and `@Media`-name rules they used to skip.
 - Strict-mode error messages now carry `chatter`'s canonical error code
   alongside the variant name (e.g. `[E305 MissingTerminator]` where they
   previously read `[MissingTerminator]`). The code is the identifier
@@ -56,6 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `to_chat` from SRT, ELAN and TextGrid no longer loses words. Those converters
+  emit CHAT whose utterance bodies are source text -- a subtitle line, an
+  annotation value -- and then read that text back with a CHAT grammar, which
+  treats punctuation as structure and drops whatever it cannot account for:
+  `Hello [world] and <stuff> & more!` came back as `more !`, `50% off` as
+  `off`, and `cost $5` as `cost`. They now build the CHAT objects directly from
+  the generated text, as the CoNLL-U converter already did. Words are the
+  whitespace-separated runs of the source, with a trailing `.`, `?` or `!` on
+  the last word kept as its own terminator token; the emitted `.cha` text is
+  unchanged.
+- `Utterance.audible` no longer leaks a stray `[` for a code-switch span.
+  `<como estas> [@s] there .` came back as `como estas [ there .`, because
+  `[@s]` and `[@s:code]` were not among the annotations the audible view knows
+  to drop and so fell through to the branch that keeps an unrecognized bracket
+  as a word. The span marks the language of the words it scopes; those words
+  are speech and stay, the marker does not.
 - A continuation line beginning with `@`, `*` or `%` is no longer promoted to a
   line of its own. CHAT wraps a long header or tier by starting the next line
   with a tab, but rustling classified lines by their first character *after*
@@ -81,10 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parse and the utterance is reported as a mor/word misalignment with no
   `pos`/`mor` on its tokens. The raw tier text is still available from
   `Utterance.tiers`. Postclitics (`~`) are unaffected.
-- Some checks the previous hand-written validator performed have no `chatter`
-  equivalent yet, so `strict=True` no longer flags them: tone terminators,
-  invalid language codes, and zero-word forms. Validation is stricter overall
-  (see above), but these specific checks were lost.
+- One check the previous hand-written validator performed has no `chatter`
+  equivalent, so `strict=True` no longer flags it: a tone terminator
+  (a trailing `-.`, `-?` or `-,.`). Validation is stricter overall (see
+  above), but this specific check was lost.
 - The `[x N]` repetition marker is not yet implemented by `chatter`'s grammar,
   so `strict=True` rejects files containing it and lenient parsing degrades the
   affected utterance's word tokens (the marker's content can surface as word

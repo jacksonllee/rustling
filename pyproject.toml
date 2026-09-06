@@ -70,6 +70,8 @@ dev = [
     "flake8 >= 7.3.0",
     "mypy >= 1.19.1",
     "pytest >= 9.0.2",
+    # chatter's error specs carry TOML frontmatter; tomllib is stdlib from 3.11.
+    "tomli >= 2.0.1 ; python_version < '3.11'",
 ]
 docs = [
     "sphinx >= 8.1.3",

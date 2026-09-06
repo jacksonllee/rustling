@@ -2,18 +2,25 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # chatter's error specs are TOML; tomllib landed in 3.11.
+    import tomli as tomllib
+
 CACHE_ROOT = Path.home() / ".rustling"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHATTER_URL = "https://github.com/TalkBank/chatter.git"
 
-# Only these two paths are checked out; the rest of the chatter repo (~42M) is
-# never fetched.
-SPARSE_PATHS = ("corpus/reference", "spec/errors")
+# Only these paths are checked out; the rest of the chatter repo (~42M) is
+# never fetched. `spec/codes` holds the error-code registry, which is where a
+# code's status lives; `spec/errors` holds the examples that document it.
+SPARSE_PATHS = ("corpus/reference", "spec/errors", "spec/codes")
 
 
 def _pinned_chatter_tag() -> str:
@@ -93,13 +100,28 @@ def reference_corpus_files(reference_corpus_dir):
 
 @dataclass(frozen=True)
 class ErrorSpec:
-    """One invalid-CHAT example extracted from a ``spec/errors`` markdown file."""
+    """One CHAT example extracted from a ``spec/errors`` file.
+
+    Since chatter's spec format moved to TOML frontmatter, each example states
+    a ``claim`` about itself rather than listing the codes it expects, and the
+    claim's negative half is part of the contract: a ``subsumed_by`` example
+    asserts that a more general rule fires and that the spec's own code does
+    *not*.
+    """
 
     spec_name: str
     code: str
     chat: str
-    expected_codes: tuple[str, ...]
     status: str
+    level: str
+    # ``violates`` (the spec's own code must fire), ``legal`` (the spec's own
+    # code must not fire -- which does not promise the example is clean, only
+    # that it satisfies this one rule), or ``subsumed`` (some other code fires
+    # and this spec's own code must not).
+    claim: str
+    # The codes a ``subsumed`` example expects instead of its own; empty for
+    # the other two claims.
+    subsumed_by: tuple[str, ...]
     # Position within the spec file. A file may hold several examples and they
     # do not all behave alike, so baselines are keyed per example rather than
     # per file.
@@ -109,48 +131,81 @@ class ErrorSpec:
     def key(self) -> str:
         return f"{self.spec_name}#{self.example_index}"
 
+    @property
+    def expected_codes(self) -> tuple[str, ...]:
+        """The codes loading this example must report, if any."""
+        if self.claim == "violates":
+            return (self.code,)
+        return self.subsumed_by
 
-# ``## Example N`` sections hold the CHAT sample; the metadata line above it
-# names the codes the sample is expected to trigger.
-_CHAT_BLOCK_RE = re.compile(r"```chat\n(.*?)```", re.DOTALL)
-_EXPECTED_RE = re.compile(r"\*\*Expected Error Codes\*\*:\s*(.+)")
-_STATUS_RE = re.compile(r"\*\*Status\*\*:\s*(\S+)")
+
+# Frontmatter runs from the opening `+++` to the next line that is exactly
+# `+++`; everything the tests need lives inside it, and the markdown body after
+# it is prose. Every spec file has exactly one such block, so a file without
+# one (the enhancement guide) is not a spec.
+_FRONTMATTER_RE = re.compile(r"\A\+\+\+\n(.*?)\n\+\+\+$", re.DOTALL | re.MULTILINE)
 # No word boundaries: spec files are named `E241_illegal_untranscribed.md`, and
 # `_` is a word character, so `\b` would never match after the digits.
 _CODE_RE = re.compile(r"E\d{3}")
-_FILENAME_CODE_RE = re.compile(r"^(E\d{3})")
 
 
-def _parse_error_spec(path: Path) -> list[ErrorSpec]:
-    text = path.read_text()
-    status_match = _STATUS_RE.search(text)
-    status = status_match.group(1) if status_match else "unspecified"
-    code_match = _FILENAME_CODE_RE.match(path.name)
-    if code_match is None:
+def _code_statuses(chatter_repo_dir: Path) -> dict[str, str]:
+    """Every error code's status, from chatter's code registry.
+
+    ``spec/codes/error-codes.toml`` is the declared single owner of a code's
+    status; the spec files under ``spec/errors`` only document a code and no
+    longer carry it. Reading it here rather than from a spec's frontmatter is
+    what keeps the two from drifting.
+    """
+    registry = chatter_repo_dir / "spec" / "codes" / "error-codes.toml"
+    data = tomllib.loads(registry.read_text())
+    return {entry["code"]: entry["status"] for entry in data.get("code", [])}
+
+
+def _parse_error_spec(path: Path, statuses: dict[str, str]) -> list[ErrorSpec]:
+    match = _FRONTMATTER_RE.match(path.read_text())
+    if match is None:
         return []
-    code = code_match.group(1)
+    data = tomllib.loads(match.group(1))
+    code = data.get("code", "")
+    # Skips the `E###` template in README.md, and `W1xx` warning specs: a
+    # warning is not an error, and `strict=True` raises only on errors, so a
+    # warning example could never do anything but sit in a baseline.
+    if not _CODE_RE.fullmatch(code):
+        return []
+    # A spec's code is a foreign key into the registry, so a spec naming a code
+    # the registry does not define is a broken checkout rather than a code to
+    # quietly treat as enforced.
+    if code not in statuses:
+        raise RuntimeError(
+            f"{path.name} documents {code}, which is absent from chatter's "
+            f"error-code registry"
+        )
+    status = statuses[code]
 
     specs = []
-    # Split on example headings so each CHAT block keeps the expected-code line
-    # that belongs to it rather than the file's first one.
-    sections = re.split(r"\n## +Example\b", text)[1:] or [text]
-    for section in sections:
-        chat_match = _CHAT_BLOCK_RE.search(section)
-        if chat_match is None:
+    for example in data.get("example", []):
+        chat = example.get("chat")
+        if chat is None:
             continue
-        expected_match = _EXPECTED_RE.search(section)
-        expected = (
-            tuple(_CODE_RE.findall(expected_match.group(1)))
-            if expected_match
-            else (code,)
-        )
+        claim = example.get("claim", "violates")
+        if isinstance(claim, dict):
+            subsumed_by = claim.get("subsumed_by", [])
+            if isinstance(subsumed_by, str):
+                subsumed_by = [subsumed_by]
+            claim_kind = "subsumed"
+        else:
+            subsumed_by = []
+            claim_kind = claim
         specs.append(
             ErrorSpec(
                 spec_name=path.name,
                 code=code,
-                chat=chat_match.group(1),
-                expected_codes=expected or (code,),
+                chat=chat,
                 status=status,
+                level=example.get("level", "unspecified"),
+                claim=claim_kind,
+                subsumed_by=tuple(subsumed_by),
                 example_index=len(specs),
             )
         )
@@ -159,11 +214,12 @@ def _parse_error_spec(path: Path) -> list[ErrorSpec]:
 
 @pytest.fixture(scope="session")
 def error_specs(chatter_repo_dir):
-    """Invalid-CHAT examples from ``spec/errors``, with their expected codes."""
+    """Every CHAT example in ``spec/errors``, with the claim it makes."""
     spec_dir = chatter_repo_dir / "spec" / "errors"
+    statuses = _code_statuses(chatter_repo_dir)
     specs = []
     for path in sorted(spec_dir.glob("*.md")):
-        specs.extend(_parse_error_spec(path))
+        specs.extend(_parse_error_spec(path, statuses))
     return specs
 
 

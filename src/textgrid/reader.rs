@@ -906,23 +906,29 @@ pub trait BaseTextGrid: Sized {
     }
 
     /// Convert to a [`Chat`](crate::chat::Chat) object.
+    ///
+    /// Builds the CHAT files from the generated text directly rather than
+    /// re-parsing it: a TextGrid interval label is source text, not CHAT markup,
+    /// and a CHAT grammar drops whatever punctuation it cannot account for.
+    /// See [`crate::chat::from_generated`].
     fn to_chat_obj(&self, participants: Option<&[String]>) -> crate::chat::Chat {
         let strs = self.to_chat_strings(participants);
-        let ids: Vec<String> = self
+        let files: Vec<crate::chat::ChatFile> = self
             .files()
             .iter()
-            .map(|f| {
+            .zip(strs.iter())
+            .map(|(f, text)| {
                 let path = std::path::Path::new(&f.file_path);
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if uuid::Uuid::try_parse(stem).is_ok() {
+                let id = if uuid::Uuid::try_parse(stem).is_ok() {
                     f.file_path.clone()
                 } else {
                     format!("{stem}.cha")
-                }
+                };
+                crate::chat::from_generated::chat_file_from_generated(text, id)
             })
             .collect();
-        let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None, false);
-        chat
+        crate::chat::Chat::from_chat_files(files)
     }
 
     /// Write CHAT (.cha) files to a directory.

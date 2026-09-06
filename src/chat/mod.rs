@@ -8,6 +8,7 @@ mod clean_utterance;
 mod conllu_writer;
 mod elan_writer;
 mod from_chatter;
+pub(crate) mod from_generated;
 pub(crate) mod header;
 #[cfg(feature = "pyo3")]
 mod header_py;

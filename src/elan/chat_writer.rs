@@ -13,6 +13,19 @@ struct ChatUtterance {
     dep_tiers: Vec<(String, String)>,
 }
 
+/// Collapse a value's line breaks into single spaces.
+///
+/// A CHAT tier is one line: an annotation value spanning several would emit a
+/// main tier whose remainder reads as separate lines entirely, and CHAT's own
+/// wrapping convention (a leading tab) is not what an ELAN newline means. The
+/// SRT converter has always done this to subtitle text.
+fn flatten(value: &str) -> String {
+    if !value.contains(['\n', '\r']) {
+        return value.to_string();
+    }
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Convert a single [`ElanFile`] to a CHAT format string.
 ///
 /// If `participants` is `Some`, only those tier IDs are treated as main tiers.
@@ -72,7 +85,7 @@ pub(crate) fn elan_file_to_chat_str(file: &ElanFile, participants: Option<&[Stri
                     child_annotations
                         .entry(parent_ann_id.as_str())
                         .or_default()
-                        .push((dep_name.clone(), ann.value.clone()));
+                        .push((dep_name.clone(), flatten(&ann.value)));
                 }
             }
         }
@@ -90,7 +103,7 @@ pub(crate) fn elan_file_to_chat_str(file: &ElanFile, participants: Option<&[Stri
                 .unwrap_or_default();
             utterances.push(ChatUtterance {
                 participant: tier.id.clone(),
-                main_text: ann.value.clone(),
+                main_text: flatten(&ann.value),
                 start_time: ann.start_time,
                 end_time: ann.end_time,
                 dep_tiers,
@@ -203,6 +216,20 @@ mod tests {
             tiers,
             raw_xml: String::new(),
         }
+    }
+
+    /// A multi-line annotation value must not emit a multi-line main tier:
+    /// everything after the first line would read as separate content.
+    #[test]
+    fn multiline_annotation_is_flattened() {
+        let file = make_elan_file(vec![make_main_tier(
+            "CHI",
+            "Child",
+            vec![make_alignable_ann("a1", 0, 1000, "first line\nsecond line")],
+        )]);
+        let chat = elan_file_to_chat_str(&file, None);
+        assert!(chat.contains("*CHI:\tfirst line second line \u{15}0_1000\u{15}\n"));
+        assert_eq!(chat.matches("*CHI:").count(), 1);
     }
 
     #[test]

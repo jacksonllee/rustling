@@ -435,6 +435,38 @@ pub(crate) fn filter_chat_file_by_participants(
     file
 }
 
+/// What the `id` half of a `(content, id)` pair is.
+///
+/// The string APIs accept bare utterance bodies under a caller-chosen label,
+/// so their input may need a synthetic header envelope and has no transcript
+/// name. A zip entry is a whole transcript and its id is its name. The
+/// distinction decides both whether the envelope may be wrapped on and whether
+/// chatter's rules about a transcript's own name (E531) can run, so parsing a
+/// transcript out of a zip is exactly as strict as parsing it from disk.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum StrInput {
+    /// A caller-chosen label: may be a fragment, anonymous to the validator.
+    Anonymous,
+    /// The transcript's own file name.
+    Named,
+}
+
+/// The transcript name a URL implies: its last non-empty path segment.
+///
+/// A downloaded file is cached under an opaque hash, so the cache path cannot
+/// name the transcript -- chatter's rules about a transcript's own name would
+/// compare `@Media` against that hash and reject valid files. Any query string
+/// or fragment is dropped, since neither is part of the name.
+fn transcript_name_from_url(url: &str) -> String {
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .trim_end_matches('/');
+    let name = path.rsplit('/').find(|segment| !segment.is_empty());
+    name.unwrap_or(url).to_string()
+}
+
 /// Parse CHAT data from in-memory string pairs (content, id).
 ///
 /// Returns `(files, misalignments)` with file_path set on each misalignment.
@@ -444,13 +476,21 @@ pub(crate) fn parse_chat_strs(
     mor_tier: Option<&str>,
     gra_tier: Option<&str>,
     validate: bool,
+    input: StrInput,
 ) -> (Vec<ChatFile>, Vec<MisalignmentInfo>) {
     let build = |content: &str, id: &str| {
-        // String input may be a bare utterance fragment, so allow the envelope.
-        // It is also anonymous: `id` is a caller-chosen label rather than a
-        // file name, so the rules about a transcript's own name do not apply.
-        let (headers, events, raw_lines, mut mis, mut diags) =
-            parse_chat_str(content, mor_tier, gra_tier, validate, true, None);
+        let (may_be_fragment, source_path) = match input {
+            StrInput::Anonymous => (true, None),
+            StrInput::Named => (false, Some(id)),
+        };
+        let (headers, events, raw_lines, mut mis, mut diags) = parse_chat_str(
+            content,
+            mor_tier,
+            gra_tier,
+            validate,
+            may_be_fragment,
+            source_path,
+        );
         for m in &mut mis {
             m.file_path = id.to_string();
         }
@@ -1336,7 +1376,14 @@ impl Chat {
             ids.len()
         );
         let pairs: Vec<(String, String)> = strs.into_iter().zip(ids).collect();
-        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier, validate);
+        let (files, misalignments) = parse_chat_strs(
+            pairs,
+            parallel,
+            mor_tier,
+            gra_tier,
+            validate,
+            StrInput::Anonymous,
+        );
         (Self::from_chat_files(files), misalignments)
     }
 
@@ -1433,7 +1480,16 @@ impl Chat {
             pairs.push((content, name.clone()));
         }
 
-        let (files, misalignments) = parse_chat_strs(pairs, parallel, mor_tier, gra_tier, validate);
+        // A zip entry is a whole transcript under its own name, so it is held
+        // to the same rules as the same bytes loaded from disk.
+        let (files, misalignments) = parse_chat_strs(
+            pairs,
+            parallel,
+            mor_tier,
+            gra_tier,
+            validate,
+            StrInput::Named,
+        );
         Ok((Self::from_chat_files(files), misalignments))
     }
 
@@ -1497,21 +1553,50 @@ impl Chat {
                 validate,
             )
         } else {
-            let content = std::fs::read_to_string(local_path)?;
-            Ok(Self::from_strs(
-                vec![content],
-                None,
+            // A downloaded transcript is a whole file, not a fragment, so it
+            // is read as one. Its name has to come from the URL rather than
+            // from the cache, whose file name is an opaque hash: chatter's
+            // rules about a transcript's own name would otherwise compare
+            // `@Media` against that hash and reject valid transcripts.
+            let content = std::fs::read_to_string(&local_path)?;
+            let (files, misalignments) = parse_chat_strs(
+                vec![(content, transcript_name_from_url(url))],
                 parallel,
                 mor_tier,
                 gra_tier,
                 validate,
-            ))
+                StrInput::Named,
+            );
+            Ok((Self::from_chat_files(files), misalignments))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// A URL-loaded transcript is named by its URL, not by the opaque hash the
+    /// download cache stores it under: chatter compares `@Media` against the
+    /// transcript's own name, so a hash would reject valid files with E531.
+    #[test]
+    fn transcript_name_comes_from_the_url() {
+        assert_eq!(
+            transcript_name_from_url("https://example.org/data/session-01.cha"),
+            "session-01.cha"
+        );
+        assert_eq!(
+            transcript_name_from_url("https://example.org/session-01.cha?token=abc"),
+            "session-01.cha"
+        );
+        assert_eq!(
+            transcript_name_from_url("https://example.org/data/session-01.cha#frag"),
+            "session-01.cha"
+        );
+        assert_eq!(
+            transcript_name_from_url("https://example.org/data/"),
+            "data"
+        );
+    }
     use super::*;
     use crate::chat::utterance::Utterances;
     use std::collections::HashMap;

@@ -3,6 +3,7 @@
 import datetime
 import re
 import warnings
+import zipfile
 
 import pytest
 
@@ -729,12 +730,19 @@ class TestProblemReporting:
 class TestChatterErrorSpecs:
     """strict=True must reject the invalid CHAT that chatter's specs describe.
 
-    ``spec/errors`` is the successor to the old testchat ``bad/`` directory and
-    is richer than it: each example carries the error code it is expected to
-    trigger, so these tests check not just that loading fails but that the
-    reported code is the right one.
+    Each example in ``spec/errors`` states a ``claim`` about itself, and the
+    claim is a two-sided contract: ``violates`` means the spec's own code must
+    fire, ``subsumed`` names the more general codes that fire *instead* and
+    asserts the spec's own code does not, and ``legal`` means the spec's own
+    code must not fire.
 
-    Both baselines below are compared for exact equality rather than as
+    A ``legal`` example is legal *with respect to its own rule*, which is
+    weaker than being clean: several deliberately break some other rule while
+    demonstrating that this one is satisfied (E758's separator examples include
+    a `%mor` tier with an empty POS, which is E760). The gate for "rustling
+    loads valid CHAT" is the reference corpus, not these examples.
+
+    The baselines below are compared for exact equality rather than as
     allowlists. An entry that starts passing is as much a change worth seeing
     as one that starts failing, and this branch tracks chatter closely enough
     that either should be noticed at the next version bump.
@@ -751,15 +759,15 @@ class TestChatterErrorSpecs:
     NO_ERROR_RAISED = {
         # chatter reports E603 as a Warning, and strict=True raises only on
         # errors, so accepting this is the intended behaviour.
-        "E603_invalid_tim_tier_format.md#0",
+        "E603.md#0",
         # chatter emits no diagnostic at all for these, on the raw spec text,
-        # despite the spec declaring the rule implemented.
-        "E725_modsyl_mod_count_mismatch.md#0",
-        "E726_phosyl_pho_count_mismatch.md#0",
-        "E727_phoaln_mod_count_mismatch.md#0",
-        "E728_phoaln_pho_count_mismatch.md#0",
-        "E733_auto.md#0",
-        "E734_auto.md#0",
+        # despite the registry declaring the rule implemented.
+        "E725.md#0",
+        "E726.md#0",
+        "E727.md#0",
+        "E728.md#0",
+        "E733.md#0",
+        "E734.md#0",
     }
 
     # Rejected, but through rustling's mor/word misalignment channel, which
@@ -768,28 +776,19 @@ class TestChatterErrorSpecs:
     # MorCountMismatchTooFew, E706 MorCountMismatchTooMany), so this set is by
     # design rather than a gap.
     REPORTED_AS_MISALIGNMENT = {
-        "E705_auto.md#0",
-        "E705_auto.md#1",
-        "E706_auto.md#0",
-        "E706_auto.md#1",
-        "E706_auto.md#2",
-        "E706_auto.md#3",
+        "E705.md#0",
+        "E705.md#1",
+        "E706.md#0",
+        "E706.md#1",
+        "E706.md#2",
+        "E706.md#3",
     }
 
     # Rejected, and every diagnostic chatter produced is reported, but the code
-    # the spec names is not among them: these fixtures trip different rules
-    # than the spec expects.
+    # the example claims is not among them: these fixtures trip different rules
+    # than the claim expects.
     EXPECTED_CODE_NOT_REPORTED = {
-        "E502_wor_cascade_regression.md#0",
-        "E600_auto.md#0",
-        # chatter still emits no E552 for this example (it was in
-        # NO_ERROR_RAISED until chatter v0.11.0). It is rejected now only
-        # because `_load` names the file `spec_N.cha` while the fixture
-        # declares `@Media: session-01`, and rustling started passing the
-        # transcript's name to chatter's validator at v0.11.0, which is what
-        # enables E531. The spec declares no `**Source**` line, so chatter's
-        # own example runner validates it anonymously and never reaches E531.
-        "E552_media_unlinked_with_timing.md#1",
+        "E600.md#0",
     }
 
     def _enforced(self, error_specs):
@@ -811,6 +810,8 @@ class TestChatterErrorSpecs:
     def test_invalid_examples_are_rejected(self, error_specs, tmp_path):
         accepted = set()
         for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim == "legal":
+                continue
             try:
                 self._load(spec, tmp_path, i)
             except Exception:
@@ -818,10 +819,32 @@ class TestChatterErrorSpecs:
             accepted.add(spec.key)
         assert accepted == self.NO_ERROR_RAISED
 
+    def test_legal_example_does_not_report_its_code(self, error_specs, tmp_path):
+        """A ``legal`` example asserts its spec's own code does not fire.
+
+        That is the whole claim -- chatter's spec vocabulary defines it as "the
+        own code MUST NOT appear" -- so this deliberately does not require a
+        clean load. Several legal examples break an unrelated rule on purpose
+        while satisfying the one they document.
+        """
+        code_re = re.compile(r"E\d{3}")
+        leaked = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim != "legal":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if spec.code in set(code_re.findall(str(e))):
+                    leaked.add(spec.key)
+        assert leaked == set()
+
     def test_expected_error_code_is_reported(self, error_specs, tmp_path):
         code_re = re.compile(r"E\d{3}")
         wrong_code = set()
         for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim == "legal":
+                continue
             try:
                 self._load(spec, tmp_path, i)
             except Exception as e:
@@ -830,6 +853,68 @@ class TestChatterErrorSpecs:
         assert wrong_code == (
             self.REPORTED_AS_MISALIGNMENT | self.EXPECTED_CODE_NOT_REPORTED
         )
+
+    def test_subsumed_code_is_not_reported(self, error_specs, tmp_path):
+        """The negative half of a ``subsumed_by`` claim.
+
+        Such an example asserts that a more general rule fires *and* that the
+        spec's own code does not. rustling reports every diagnostic chatter
+        produced, so the second half is checkable here and not merely implied.
+        """
+        code_re = re.compile(r"E\d{3}")
+        leaked = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim != "subsumed":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if spec.code in set(code_re.findall(str(e))):
+                    leaked.add(spec.key)
+        assert leaked == set()
+
+
+class TestFromZip:
+    """A zip entry is a whole transcript, so it is validated like one."""
+
+    # Faults only a whole-transcript read can see: no `@UTF8`/`@Begin`/`@End`
+    # envelope, so a reader that wraps the input in a synthetic one hides them.
+    NO_ENVELOPE = (
+        "@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "*CHI:\thi .\n"
+    )
+    # `@Media` names something other than the transcript, which only a reader
+    # that knows the transcript's own name can report (E531).
+    MEDIA_MISMATCH = (
+        "@UTF8\n@Begin\n@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "@Media:\tsomethingelse, audio\n"
+        "*CHI:\thi .\n@End\n"
+    )
+
+    @staticmethod
+    def _codes(load):
+        try:
+            load()
+        except ValueError as e:
+            return set(re.findall(r"E\d{3}", str(e)))
+        return set()
+
+    @pytest.mark.parametrize("body", [NO_ENVELOPE, MEDIA_MISMATCH])
+    def test_zip_is_as_strict_as_files(self, tmp_path, body):
+        path = tmp_path / "t.cha"
+        path.write_text(body)
+        archive = tmp_path / "t.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("t.cha", body)
+
+        from_files = self._codes(lambda: CHAT.from_files([str(path)], strict=True))
+        from_zip = self._codes(lambda: CHAT.from_zip(str(archive), strict=True))
+        assert from_files, "fixture stopped being invalid"
+        assert from_zip == from_files
 
 
 class TestFromFiles:

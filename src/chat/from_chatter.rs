@@ -328,15 +328,14 @@ fn map_chat_file(
     } else {
         source_blocks(input)
     };
-    let mut utterance_index = 0;
+    let mut block_cursor = 0;
 
     for line in chat_file.lines.iter() {
         match line {
             Line::Utterance(u) => {
                 seen_utterance = true;
-                let (utt, mis) =
-                    map_utterance(u, input, &blocks, utterance_index, mor_key, gra_key);
-                utterance_index += 1;
+                let block = next_block_for(&blocks, &mut block_cursor, u.main.speaker.as_str());
+                let (utt, mis) = map_utterance(u, input, block, mor_key, gra_key);
                 if let Some(m) = mis {
                     misalignments.push(m);
                 }
@@ -376,8 +375,7 @@ fn changeable_event(ch: ChangeableHeader) -> Utterance {
 fn map_utterance(
     u: &talkbank_model::Utterance,
     input: &str,
-    blocks: &[SourceBlock],
-    index: usize,
+    block: Option<&SourceBlock>,
     mor_key: Option<&str>,
     gra_key: Option<&str>,
 ) -> (Utterance, Option<MisalignmentInfo>) {
@@ -385,20 +383,34 @@ fn map_utterance(
 
     // Verbatim tier text (keyed by participant + %tier).
     let mut tiers: HashMap<String, String> = HashMap::new();
-    let (main_text, dep_tiers) = verbatim_text(u, input, blocks, index);
+    let (main_text, dep_tiers) = verbatim_text(u, input, block);
     tiers.insert(participant.clone(), main_text.clone());
     tiers.extend(dep_tiers);
 
-    // chatter models only the utterance-final media bullet; transcripts also
-    // carry mid-utterance bullets, so fall back to scanning the raw tier text
-    // for the first `\x15start_end\x15` marker (the legacy behavior).
-    let time_marks = u
-        .main
-        .content
-        .bullet
-        .as_ref()
-        .map(|b| (b.timing.start_ms as i64, b.timing.end_ms as i64))
-        .or_else(|| first_time_mark(&main_text));
+    // `time_marks` is the utterance's *start*, so the first bullet on the line
+    // is the one wanted. chatter models a single bullet per utterance and it is
+    // the last one, which is the same bullet only when there is just one: an
+    // utterance aligned phrase by phrase would otherwise report the start of
+    // its final phrase.
+    //
+    // Scanning the raw text is only sound where that text is certainly this
+    // utterance's, which is the span-carrying backends. Where `block` is set
+    // the text came from `next_block_for`'s speaker-matched guess, which can
+    // still land on another turn by the same speaker; the typed bullet is then
+    // the better answer, being the right utterance's even when it is the last
+    // bullet rather than the first.
+    let typed_bullet = || {
+        u.main
+            .content
+            .bullet
+            .as_ref()
+            .map(|b| (b.timing.start_ms as i64, b.timing.end_ms as i64))
+    };
+    let time_marks = if block.is_some() {
+        typed_bullet().or_else(|| first_time_mark(&main_text))
+    } else {
+        first_time_mark(&main_text).or_else(typed_bullet)
+    };
 
     // Words from the main tier + a trailing terminator token (matches legacy).
     let mut words: Vec<String> = Vec::new();
@@ -632,6 +644,9 @@ fn collect_words(items: &[UtteranceContent], out: &mut Vec<String>) {
 /// chatter's spans cannot reach. It never feeds the parser.
 #[derive(Default)]
 pub(crate) struct SourceBlock {
+    /// The `*CODE` this block was opened by, used to pair blocks with
+    /// chatter's utterances by speaker rather than by position.
+    speaker: String,
     main: String,
     tiers: Vec<(String, String)>,
 }
@@ -674,7 +689,9 @@ fn source_blocks(input: &str) -> Vec<SourceBlock> {
         let line = line.trim_end();
         if let Some(rest) = line.strip_prefix('*') {
             continuation = Continuation::Main;
+            let speaker = rest.split_once(':').map_or(rest, |(code, _)| code);
             blocks.push(SourceBlock {
+                speaker: speaker.trim().to_string(),
                 main: tier_content(rest),
                 tiers: Vec::new(),
             });
@@ -709,8 +726,7 @@ fn source_blocks(input: &str) -> Vec<SourceBlock> {
 fn verbatim_text(
     u: &talkbank_model::Utterance,
     input: &str,
-    blocks: &[SourceBlock],
-    index: usize,
+    block: Option<&SourceBlock>,
 ) -> (String, Vec<(String, String)>) {
     if !u.main.span.is_dummy() {
         let main = tier_content(slice(input, u.main.span));
@@ -721,10 +737,36 @@ fn verbatim_text(
             .collect();
         return (main, deps);
     }
-    match blocks.get(index) {
+    match block {
         Some(block) => (block.main.clone(), block.tiers.clone()),
         None => (String::new(), Vec::new()),
     }
+}
+
+/// The next source block spoken by `speaker`, advancing `cursor` past it.
+///
+/// chatter emits no utterance for a `*` line it cannot parse, while
+/// [`source_blocks`] still opens a block for that line, so pairing the two
+/// lists by position would slip by one for the rest of the file and hand every
+/// later utterance some other speaker's text. Scanning forward to the next
+/// block with a matching speaker code resynchronizes on the dropped line.
+///
+/// The speaker code is all there is to match on: this path runs only where the
+/// parser records no spans, which is exactly where the text cannot be located
+/// in the source any other way. So a dropped line whose speaker matches the
+/// next parsed utterance's still shifts the rest of that speaker's blocks by
+/// one -- strictly less often than a positional index, which shifts on every
+/// dropped line, but not never.
+fn next_block_for<'a>(
+    blocks: &'a [SourceBlock],
+    cursor: &mut usize,
+    speaker: &str,
+) -> Option<&'a SourceBlock> {
+    let offset = blocks[*cursor..]
+        .iter()
+        .position(|b| b.speaker == speaker)?;
+    *cursor += offset + 1;
+    blocks.get(*cursor - 1)
 }
 
 fn slice(input: &str, span: talkbank_model::Span) -> &str {
@@ -740,7 +782,12 @@ fn first_time_mark(text: &str) -> Option<(i64, i64)> {
     let after_open = &text[text.find(BULLET)? + BULLET.len_utf8()..];
     let inner = &after_open[..after_open.find(BULLET)?];
     let (start, end) = inner.split_once('_')?;
-    Some((start.trim().parse().ok()?, end.trim().parse().ok()?))
+    // Some transcripts hyphenate the bullet as `\x15-0_1500-\x15`; the dashes
+    // are punctuation around the pair, not a sign on either number, which is
+    // how the hand-written reader's `\x15-?(\d+)_(\d+)-?\x15` read them too.
+    let start = start.trim().trim_start_matches('-');
+    let end = end.trim().trim_end_matches('-');
+    Some((start.parse().ok()?, end.parse().ok()?))
 }
 
 /// Trim a raw tier slice and fold its continuation lines into single spaces.
@@ -952,9 +999,13 @@ fn fold_file_header(headers: &mut Headers, header: &Header) {
         }),
         Header::Unknown { text, .. } => {
             if let Some((name, value)) = text.as_str().split_once(':') {
+                // chatter hands the header over as written, `@` and all, but
+                // `Headers.other` has always been keyed by the bare name --
+                // `other["MyCustom"]`, not `other["@MyCustom"]`.
+                let name = name.trim().trim_start_matches('@');
                 headers
                     .other
-                    .insert(name.trim().to_string(), value.trim().to_string());
+                    .insert(name.to_string(), value.trim().to_string());
             }
         }
         // Structural / already-handled / non-file headers.
@@ -1223,6 +1274,66 @@ mod tests {
         for text in tiers.values() {
             assert!(!text.contains('\n'), "tier text kept a newline: {text:?}");
         }
+    }
+
+    /// `time_marks` is the utterance's start, so a transcript aligned phrase
+    /// by phrase must report its first bullet. chatter models one bullet per
+    /// utterance and it is the last, which used to win outright and shift
+    /// every exported start time to the final phrase.
+    #[test]
+    fn time_marks_come_from_the_first_bullet() {
+        let text = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n\
+            @ID:\teng|test|CHI|||||Target_Child|||\n\
+            *CHI:\thello \u{15}0_2200\u{15} there \u{15}2370_2800\u{15} .\n@End\n";
+        let a = parse(text);
+        assert_eq!(a.events[0].time_marks, Some((0, 2200)));
+    }
+
+    /// Some transcripts hyphenate the bullet. The dashes bracket the pair
+    /// rather than signing either number, which the hand-written reader's
+    /// `\x15-?(\d+)_(\d+)-?\x15` also assumed.
+    #[test]
+    fn time_marks_tolerate_hyphenated_bullet() {
+        assert_eq!(first_time_mark("hi \u{15}0_1500\u{15}"), Some((0, 1500)));
+        assert_eq!(first_time_mark("hi \u{15}-0_1500-\u{15}"), Some((0, 1500)));
+        assert_eq!(first_time_mark("hi \u{15}123_456-\u{15}"), Some((123, 456)));
+        assert_eq!(first_time_mark("no bullet here"), None);
+    }
+
+    /// `Headers.other` is keyed by the bare header name. chatter hands the
+    /// header over as written, `@` and all.
+    #[test]
+    fn unknown_header_key_drops_the_at_sign() {
+        let text = "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n\
+            @ID:\teng|test|CHI|||||Target_Child|||\n@MyCustom:\tsomething\n\
+            *CHI:\thi .\n@End\n";
+        let a = parse(text);
+        assert_eq!(
+            a.headers.other.get("MyCustom").map(String::as_str),
+            Some("something")
+        );
+        assert!(!a.headers.other.contains_key("@MyCustom"));
+    }
+
+    /// Blocks pair with chatter's utterances by speaker, not by position:
+    /// chatter emits no utterance for a `*` line it cannot parse, while
+    /// `source_blocks` still opens a block for it, so a positional index would
+    /// hand every later utterance the previous speaker's text.
+    #[test]
+    fn blocks_resync_on_a_dropped_main_tier() {
+        let blocks =
+            source_blocks("*CHI:\tfirst .\n*MOT:\tunparsable .\n*CHI:\tsecond .\n*MOT:\tthird .\n");
+        assert_eq!(blocks.len(), 4);
+
+        // chatter dropped the second line, so it asks for CHI, CHI, MOT.
+        let mut cursor = 0;
+        let first = next_block_for(&blocks, &mut cursor, "CHI").unwrap();
+        assert_eq!(first.main, "first .");
+        let second = next_block_for(&blocks, &mut cursor, "CHI").unwrap();
+        assert_eq!(second.main, "second .");
+        let third = next_block_for(&blocks, &mut cursor, "MOT").unwrap();
+        assert_eq!(third.main, "third .");
+        assert!(next_block_for(&blocks, &mut cursor, "CHI").is_none());
     }
 
     /// The span-less fallback reads the source by line. A continuation line

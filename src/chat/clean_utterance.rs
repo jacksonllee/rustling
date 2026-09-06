@@ -75,6 +75,9 @@ fn classify_bracket(content: &str) -> Segment {
         // Retracings keep the preceding material -- just drop the bracket.
         "/" | "//" | "///" | "/?" | "/-" | "e" => return Segment::Drop,
         "?" | "!" | "!!" | "^c" | "*" => return Segment::Drop,
+        // Code-switch span: `<como estas> [@s]` marks the language of the
+        // words it scopes, which are audible on their own.
+        "@s" => return Segment::Drop,
         _ => {}
     }
 
@@ -91,6 +94,12 @@ fn classify_bracket(content: &str) -> Segment {
     // Replacement brackets: `[: …]` and `[:: …]` keep the original word and
     // discard the replacement, which is just dropping the bracket.
     if content.starts_with(":: ") || content.starts_with(": ") {
+        return Segment::Drop;
+    }
+
+    // `[@s:code]`, the code-switch span naming an explicit language. No space
+    // follows the marker, so this cannot join the patterns below.
+    if trimmed.starts_with("@s:") {
         return Segment::Drop;
     }
 
@@ -610,6 +619,22 @@ mod tests {
         assert_eq!(audible_utterance("ww ."), ".");
         assert_eq!(audible_utterance("xx ."), ".");
         assert_eq!(audible_utterance("yy ."), ".");
+    }
+
+    #[test]
+    fn test_audible_drops_code_switch_span() {
+        // `[@s]` / `[@s:code]` annotate the language of the words they scope;
+        // those words are speech and stay, the marker is not.
+        assert_eq!(
+            audible_utterance("<como estas> [@s] there ."),
+            "como estas there ."
+        );
+        assert_eq!(
+            audible_utterance("<como estas> [@s:spa] there ."),
+            "como estas there ."
+        );
+        // A single content item needs no angle brackets.
+        assert_eq!(audible_utterance("hola [@s] there ."), "hola there .");
     }
 
     #[test]

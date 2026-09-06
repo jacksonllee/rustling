@@ -10,6 +10,17 @@ struct ChatUtterance {
     end_ms: i64,
 }
 
+/// Collapse an interval label's line breaks into single spaces.
+///
+/// A CHAT tier is one line, and a TextGrid label spanning several would emit a
+/// main tier whose remainder reads as separate lines entirely.
+fn flatten(value: &str) -> String {
+    if !value.contains(['\n', '\r']) {
+        return value.to_string();
+    }
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Convert a single [`TextGridFile`] to a CHAT format string.
 ///
 /// If `participants` is `Some`, only IntervalTiers with those names are included.
@@ -51,7 +62,7 @@ pub(crate) fn textgrid_file_to_chat_str(
                 let end_ms = (interval.xmax * 1000.0).round() as i64;
                 utterances.push(ChatUtterance {
                     participant: name.clone(),
-                    text: interval.text.clone(),
+                    text: flatten(&interval.text),
                     start_ms,
                     end_ms,
                 });
@@ -121,6 +132,23 @@ mod tests {
             tiers,
             raw_text: String::new(),
         }
+    }
+
+    /// A multi-line interval label must not emit a multi-line main tier:
+    /// everything after the first line would read as separate content.
+    #[test]
+    fn multiline_label_is_flattened() {
+        let file = make_textgrid_file(vec![make_interval_tier(
+            "CHI",
+            vec![Interval {
+                xmin: 0.0,
+                xmax: 1.5,
+                text: "first line\nsecond line".to_string(),
+            }],
+        )]);
+        let chat = textgrid_file_to_chat_str(&file, None);
+        assert!(chat.contains("*CHI:\tfirst line second line \x150_1500\x15"));
+        assert_eq!(chat.matches("*CHI:").count(), 1);
     }
 
     #[test]

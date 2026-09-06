@@ -49,16 +49,16 @@ zstd = "0.13"
 # published to crates.io (planned for its 1.0 release). talkbank-model is the
 # typed CHAT AST + validation (pure Rust, wasm-clean); the parser backend is
 # target-gated below (tree-sitter natively, pure-Rust re2c on wasm).
-talkbank-model = { git = "https://github.com/TalkBank/chatter", tag = "v0.12.0" }
+talkbank-model = { git = "https://github.com/TalkBank/chatter", tag = "v0.20.2" }
 
 # Native targets use the official tree-sitter-backed parser (compiles C via cc).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-talkbank-parser = { git = "https://github.com/TalkBank/chatter", tag = "v0.12.0" }
+talkbank-parser = { git = "https://github.com/TalkBank/chatter", tag = "v0.20.2" }
 
 # WASM (Pyodide/emscripten) uses the pure-Rust re2c parser to avoid compiling
 # tree-sitter's C runtime under emscripten.
 [target.'cfg(target_family = "wasm")'.dependencies]
-talkbank-parser-re2c = { git = "https://github.com/TalkBank/chatter", tag = "v0.12.0" }
+talkbank-parser-re2c = { git = "https://github.com/TalkBank/chatter", tag = "v0.20.2" }
 
 [dev-dependencies]
 tempfile = "3"
