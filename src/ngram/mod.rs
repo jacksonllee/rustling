@@ -219,9 +219,7 @@ pub trait BaseNgrams: Sized + Clone {
     /// Clear all counts.
     fn clear(&mut self) {
         self.counts_mut().clear();
-        for t in self.totals_mut() {
-            *t = 0;
-        }
+        self.totals_mut().fill(0);
     }
 }
 

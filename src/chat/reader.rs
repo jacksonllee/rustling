@@ -575,7 +575,10 @@ pub(crate) fn load_chat_files(
 pub fn serialize_chat_file(file: &ChatFile) -> String {
     let mut output = String::new();
     for line in &file.raw_lines {
-        if line == "@End" {
+        // Compared trimmed: `raw_lines` is the source as written, so a file
+        // whose `@End` carries trailing whitespace would otherwise keep that
+        // line *and* gain the canonical one below, emitting two.
+        if line.trim() == "@End" {
             continue;
         }
         output.push_str(line);
@@ -2186,6 +2189,18 @@ mod tests {
         let output = serialize_chat_file(&file);
         assert!(output.ends_with("@End\n"));
         assert_eq!(output.matches("@End").count(), 1);
+    }
+
+    #[test]
+    fn test_serialize_drops_at_end_with_trailing_whitespace() {
+        // Trailing whitespace is common in real transcripts, and `raw_lines`
+        // keeps the source as written, so the `@End` skip has to tolerate it
+        // or the output carries two `@End` lines and no longer re-reads.
+        let input = "@UTF8\n@Begin\n*CHI:\thello .\n@End \n";
+        let file = make_chat_file("test", input);
+        let output = serialize_chat_file(&file);
+        assert_eq!(output.matches("@End").count(), 1);
+        assert!(output.ends_with("@End\n"));
     }
 
     #[test]

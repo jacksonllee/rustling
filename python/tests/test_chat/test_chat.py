@@ -917,6 +917,46 @@ class TestFromZip:
         assert from_zip == from_files
 
 
+class TestDamagedTranscripts:
+    """A transcript missing part of its envelope still yields its utterances.
+
+    Lenient loading exists for real corpora, where a file cut off mid-transfer
+    or written without `@UTF8` is an ordinary thing to meet. Both shapes
+    returned an empty reader for part of this branch's life -- the whole
+    document was discarded over a fault in its envelope -- and no test here
+    noticed when that changed, in either direction.
+    """
+
+    BODY = (
+        "@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "*CHI:\thello world .\n"
+    )
+
+    @staticmethod
+    def _words(path):
+        reader = CHAT.from_files([str(path)], strict=False)
+        return [[t.word for t in u.tokens] for u in reader.utterances()]
+
+    def test_truncated_file_keeps_its_last_utterance(self, tmp_path):
+        # No `@End` and no final newline: the shape a truncated file has.
+        path = tmp_path / "t.cha"
+        path.write_text("@UTF8\n@Begin\n" + self.BODY.rstrip("\n"))
+        assert self._words(path) == [["hello", "world", "."]]
+        with pytest.raises(ValueError, match="E502"):
+            CHAT.from_files([str(path)], strict=True)
+
+    def test_file_without_utf8_header_keeps_its_utterances(self, tmp_path):
+        path = tmp_path / "t.cha"
+        path.write_text("@Begin\n" + self.BODY + "@End\n")
+        assert self._words(path) == [["hello", "world", "."]]
+        # The one missing header is reported, without cascading into claims
+        # that the headers the file does carry are absent.
+        with pytest.raises(ValueError, match="E503"):
+            CHAT.from_files([str(path)], strict=True)
+
+
 class TestFromFiles:
     def test_from_files(self, reference_corpus_files):
         cha_files = [str(p) for p in reference_corpus_files[:3]]
