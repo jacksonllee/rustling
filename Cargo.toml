@@ -34,7 +34,7 @@ uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 zip = "8"
 quick-xml = { version = "0.41", features = ["serialize"] }
-zstd = "0.13"
+zstd = "0.14"
 
 [dev-dependencies]
 tempfile = "3"
