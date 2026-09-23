@@ -768,6 +768,28 @@ class TestChatterErrorSpecs:
         "E728.md#0",
         "E733.md#0",
         "E734.md#0",
+        # Cross-utterance quotation and completion linkers. These rules are
+        # implemented, but only run under chatter's opt-in
+        # `RuleSelection::with_strict_linkers`, which rustling deliberately
+        # does not enable: chatter keeps it off by default because real
+        # corpora (CORAAL, OralArguments) do not follow the strict quotation
+        # sequence, so turning it on would reject valid transcripts wholesale.
+        # rustling's verdict on these examples is unchanged -- it accepted
+        # them under the previous pin too; what moved is the registry, which
+        # reclassified all eight codes from `not_implemented` to
+        # `implemented`, so they enter the enforced set for the first time.
+        # The status vocabulary cannot say "implemented but opt-in", which is
+        # why these need naming here rather than falling to
+        # UNENFORCED_STATUSES.
+        "E341.md#0",
+        "E341.md#1",
+        "E344.md#0",
+        "E346.md#0",
+        "E351.md#0",
+        "E352.md#0",
+        "E353.md#0",
+        "E354.md#0",
+        "E355.md#0",
     }
 
     # Rejected, but through rustling's mor/word misalignment channel, which
@@ -1881,6 +1903,33 @@ class TestStrictMode:
         assert utts[0].tokens == []
         assert utts[0].tiers is not None
         assert "%mor" in utts[0].tiers
+
+    def test_truncated_report_names_hidden_misalignments(self, tmp_path):
+        """The 50-problem cap must not silently swallow a whole channel.
+
+        chatter's diagnostics and rustling's misalignments are collected one
+        channel after the other, so a bulk load carrying enough diagnostics to
+        fill the cap pushes every misalignment past it. Reporting a bare count
+        there would tell a caller nothing was misaligned when something was.
+        """
+        # Each file trips two chatter rules (no `@UTF8`, no `@End`).
+        bad = (
+            "@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n"
+            "@ID:\teng|test|CHI|||||Target_Child|||\n*CHI:\thi .\n"
+        )
+        for i in range(30):
+            (tmp_path / f"bad{i:02d}.cha").write_text(bad)
+        # Sorts last, so it lands past the cap.
+        (tmp_path / "zz.cha").write_text(
+            "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n"
+            "@ID:\teng|test|CHI|||||Target_Child|||\n"
+            "*CHI:\tI want a cookie .\n%mor:\tpro|I v|want .\n@End\n"
+        )
+        with pytest.raises(ValueError) as exc_info:
+            CHAT.from_dir(str(tmp_path), strict=True)
+        msg = str(exc_info.value)
+        assert "more not shown" in msg, "fixture stopped exceeding the cap"
+        assert "1 of them a mor/word misalignment" in msg
 
 
 class TestDevelopmentalMeasures:

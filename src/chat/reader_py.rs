@@ -119,6 +119,10 @@ const MAX_REPORTED_PROBLEMS: usize = 50;
 struct Problem {
     file_path: String,
     detail: String,
+    /// Which channel reported it: chatter's validator, or rustling's own
+    /// mor/word alignment check. The summary needs this to say what the cap
+    /// left out, since the two are not interchangeable to a caller.
+    is_misalignment: bool,
 }
 
 fn misalignment_detail(m: &MisalignmentInfo) -> String {
@@ -188,6 +192,7 @@ fn handle_problems(
                 problems.push(Problem {
                     file_path: d.file_path.clone(),
                     detail: format!("[{} {}] {}", d.code, d.name, d.message),
+                    is_misalignment: false,
                 });
             }
         }
@@ -196,11 +201,20 @@ fn handle_problems(
         problems.push(Problem {
             file_path: m.file_path.clone(),
             detail: misalignment_detail(m),
+            is_misalignment: true,
         });
     }
     if problems.is_empty() {
         return Ok(());
     }
+
+    // Group by file before the cap below. The two channels are collected one
+    // after the other, so without this a load carrying `MAX_REPORTED_PROBLEMS`
+    // or more chatter diagnostics pushes every misalignment past the cut and
+    // reports none of them -- the opposite of listing both together. The sort
+    // is stable, so a file's chatter diagnostics still precede its
+    // misalignments.
+    problems.sort_by(|a, b| a.file_path.cmp(&b.file_path));
 
     let file_count = problems
         .iter()
@@ -220,9 +234,22 @@ fn handle_problems(
             p.detail
         ));
     }
-    let hidden = problems.len().saturating_sub(MAX_REPORTED_PROBLEMS);
-    if hidden > 0 {
-        msg.push_str(&format!("\n  ... and {hidden} more not shown.\n"));
+    let hidden = &problems[problems.len().min(MAX_REPORTED_PROBLEMS)..];
+    if !hidden.is_empty() {
+        // Name the misalignments among the omitted ones. They are rustling's
+        // own channel and the rarer of the two, so a load carrying enough
+        // chatter diagnostics to fill the cap would otherwise report a bare
+        // count and leave no sign that any utterance was misaligned at all.
+        let hidden_misaligned = hidden.iter().filter(|p| p.is_misalignment).count();
+        let note = match hidden_misaligned {
+            0 => String::new(),
+            1 => " (1 of them a mor/word misalignment)".to_string(),
+            n => format!(" ({n} of them mor/word misalignments)"),
+        };
+        msg.push_str(&format!(
+            "\n  ... and {} more not shown{note}.\n",
+            hidden.len()
+        ));
     }
     msg.push_str(
         "\nTo load anyway, pass strict=False: misaligned utterances then get \
