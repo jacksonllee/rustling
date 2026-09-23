@@ -124,7 +124,7 @@ jobs:
           actions-cache-folder: emsdk-cache
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.1.0
 
       - name: Build wasm wheel
         env:
