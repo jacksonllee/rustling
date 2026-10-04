@@ -85,7 +85,17 @@ For Pyodide, pre-built WASM wheels (with multithreading disabled, as Pyodide doe
 are available from each `GitHub release <https://github.com/jacksonllee/rustling/releases>`_
 — look for the ``.whl`` file with ``emscripten`` in the filename.
 
-Rustling is also available in `Rust <https://docs.rs/rustling>`_.
+Rustling is also available in Rust.
+Since v0.10.0, new releases are not on crates.io, because the
+`chatter <https://github.com/TalkBank/chatter>`_ dependency for CHAT parsing
+is not yet there (the latest Rustling on crates.io and
+`docs.rs <https://docs.rs/rustling>`_ is v0.9.0).
+Rust users can depend on a release tag in ``Cargo.toml`` instead:
+
+.. code-block:: toml
+
+   [dependencies]
+   rustling = { git = "https://github.com/jacksonllee/rustling", tag = "v0.10.0" }
 
 
 Performance

@@ -13,7 +13,7 @@
 Rustling is a high-performance library for computational linguistics.
 It aims to provide flexible and efficient tools to facilitate further research.
 
-Documentation: [Python](https://docs.rustling.io/) | [Rust](https://docs.rs/rustling)
+Documentation: [Python](https://docs.rustling.io/) | [Rust](https://docs.rs/rustling) (v0.9.0; see [Rust installation](#rust))
 
 Currently implemented features:
 
@@ -62,8 +62,15 @@ are available from each [GitHub release](https://github.com/jacksonllee/rustling
 
 ### Rust
 
-```bash
-cargo add rustling
+Since v0.10.0, Rustling depends on [`chatter`](https://github.com/TalkBank/chatter)
+for CHAT parsing, which is not yet on crates.io.
+Until it is, new Rustling releases are not on crates.io either
+(the latest there is v0.9.0), and Rust users can depend on a release tag
+in `Cargo.toml` instead:
+
+```toml
+[dependencies]
+rustling = { git = "https://github.com/jacksonllee/rustling", tag = "v0.10.0" }
 ```
 
 ## License

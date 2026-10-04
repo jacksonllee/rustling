@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-10-03
+
+This release is available from PyPI and GitHub, but not from crates.io:
+`chatter` is not yet on crates.io, and crates.io does not accept a crate with
+git dependencies. Rust users can depend on the release tag instead:
+`rustling = { git = "https://github.com/jacksonllee/rustling", tag = "v0.10.0" }`.
+The Rust API documentation on docs.rs remains at v0.9.0; run `cargo doc --open`
+in a project depending on rustling for the current version.
 
 ### Changed
 
