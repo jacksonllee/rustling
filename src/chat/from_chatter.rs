@@ -218,7 +218,7 @@ pub(crate) fn parse_with_chatter(
     let input: &str = wrapped.as_deref().unwrap_or(file_text);
 
     let parse_errors = ErrorCollector::new();
-    let chat_file = backend::parse(input, &parse_errors);
+    let mut chat_file = backend::parse(input, &parse_errors);
 
     let mut diagnostics = Vec::new();
     // Parse diagnostics are already in hand: the collector is filled by the
@@ -234,9 +234,12 @@ pub(crate) fn parse_with_chatter(
         let name = source_path.map_or(TranscriptName::Anonymous, |p| {
             TranscriptName::for_path(std::path::Path::new(p))
         });
-        chat_file.validate(&verrors, name);
+        // The `with_alignment` variant is what chatter's own validator runs.
+        // It computes each utterance's tier alignments and word languages
+        // before validating, and the rules that read them -- the Phon `%x`
+        // tier counts (E725-E728) among them -- report nothing without it.
+        chat_file.validate_with_alignment(&verrors, name);
         collect_diagnostics(&verrors.into_vec(), &mut diagnostics);
-        collect_diagnostics(&chat_file.validate_alignments(), &mut diagnostics);
     }
 
     let (headers, events, misalignments) = map_chat_file(&chat_file, input, mor_key, gra_key);

@@ -4,6 +4,7 @@ import datetime
 import re
 import warnings
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -627,9 +628,24 @@ class TestFromDir:
         must agree on all of them. So a failure here is rustling's, not
         chatter's -- either in the adapter or in what rustling does to the
         source before handing it over.
+
+        The one exception is a file whose ``@Media`` names something other
+        than the file itself (every other reference file names its own stem),
+        so E531 fires on it when it is loaded under its own name. It must fail
+        on that and nothing else, and stops being exempt once it is fixed.
         """
+        media_mismatch = {"timed-gem-exterior.cha"}
         assert len(reference_corpus_files) > 0
-        CHAT.from_dir(reference_corpus_dir, strict=True)
+        assert media_mismatch <= {p.name for p in reference_corpus_files}
+        CHAT.from_files(
+            [p for p in reference_corpus_files if p.name not in media_mismatch],
+            strict=True,
+        )
+        for p in reference_corpus_files:
+            if p.name in media_mismatch:
+                with pytest.raises(ValueError) as exc_info:
+                    CHAT.from_files([p], strict=True)
+                assert set(re.findall(r"\[(E\d{3}) ", str(exc_info.value))) == {"E531"}
 
     def test_private_data_strict_compliance(self, private_data_dir):
         """Report which private test data files would fail strict=True."""
@@ -760,14 +776,6 @@ class TestChatterErrorSpecs:
         # chatter reports E603 as a Warning, and strict=True raises only on
         # errors, so accepting this is the intended behaviour.
         "E603.md#0",
-        # chatter emits no diagnostic at all for these, on the raw spec text,
-        # despite the registry declaring the rule implemented.
-        "E725.md#0",
-        "E726.md#0",
-        "E727.md#0",
-        "E728.md#0",
-        "E733.md#0",
-        "E734.md#0",
         # Cross-utterance quotation and completion linkers. These rules are
         # implemented, but only run under chatter's opt-in
         # `RuleSelection::with_strict_linkers`, which rustling deliberately
@@ -790,6 +798,13 @@ class TestChatterErrorSpecs:
         "E353.md#0",
         "E354.md#0",
         "E355.md#0",
+        # Added in chatter 0.26.0, and their notes name the same opt-in policy.
+        "E341.md#3",
+        "E344.md#3",
+        "E352.md#2",
+        "E354.md#3",
+        # Added in chatter 0.28.0, likewise.
+        "E346.md#3",
     }
 
     # Rejected, but through rustling's mor/word misalignment channel, which
@@ -811,6 +826,20 @@ class TestChatterErrorSpecs:
     # than the claim expects.
     EXPECTED_CODE_NOT_REPORTED = {
         "E600.md#0",
+        # The strict-linker rule again (see NO_ERROR_RAISED), on an utterance
+        # that also lacks a terminator, so only E305 fires. The example's own
+        # notes predict that E305.
+        "E354.md#2",
+    }
+
+    # `legal` examples whose code fires only because the transcript was given
+    # a name. This one has none by design -- it asserts that anonymous input
+    # cannot mismatch its `@Media` -- but every rustling loader that validates
+    # a whole transcript reads it from a named file, so the harness has to
+    # invent one. The string APIs, the only anonymous input, skip file-level
+    # validation.
+    NAMED_WHEN_ANONYMOUS = {
+        "E531.md#4",
     }
 
     def _enforced(self, error_specs):
@@ -821,9 +850,22 @@ class TestChatterErrorSpecs:
         # The file name is not incidental: from_files hands it to chatter as
         # the transcript's name, so a fixture whose `@Media` header names
         # something else trips E531 on top of the rule it was written for.
-        path = tmp_path / f"spec_{index}.cha"
+        # An example authored under a name is loaded under that name, in a
+        # directory of its own so two examples sharing one cannot collide.
+        # An anonymous example still has to be given a name, since every
+        # loader that validates a whole transcript reads it from a file.
+        name = Path(spec.source).name if spec.source else f"spec_{index}.cha"
+        path = tmp_path / str(index) / name
+        path.parent.mkdir()
         path.write_text(spec.chat)
         CHAT.from_files([str(path)], strict=True)
+
+    @staticmethod
+    def _reported_codes(error):
+        # Only the `[E### Name]` prefix of each reported problem. A bare
+        # `E\d{3}` also matches inside message text, e.g. a `@Media` name like
+        # `E744_3` quoted in an E531 message.
+        return set(re.findall(r"\[(E\d{3}) ", str(error)))
 
     def test_specs_were_extracted(self, error_specs):
         """Guard against a spec-format change silently emptying these tests."""
@@ -849,7 +891,6 @@ class TestChatterErrorSpecs:
         clean load. Several legal examples break an unrelated rule on purpose
         while satisfying the one they document.
         """
-        code_re = re.compile(r"E\d{3}")
         leaked = set()
         for i, spec in enumerate(self._enforced(error_specs)):
             if spec.claim != "legal":
@@ -857,12 +898,11 @@ class TestChatterErrorSpecs:
             try:
                 self._load(spec, tmp_path, i)
             except Exception as e:
-                if spec.code in set(code_re.findall(str(e))):
+                if spec.code in self._reported_codes(e):
                     leaked.add(spec.key)
-        assert leaked == set()
+        assert leaked == self.NAMED_WHEN_ANONYMOUS
 
     def test_expected_error_code_is_reported(self, error_specs, tmp_path):
-        code_re = re.compile(r"E\d{3}")
         wrong_code = set()
         for i, spec in enumerate(self._enforced(error_specs)):
             if spec.claim == "legal":
@@ -870,7 +910,7 @@ class TestChatterErrorSpecs:
             try:
                 self._load(spec, tmp_path, i)
             except Exception as e:
-                if not set(code_re.findall(str(e))) & set(spec.expected_codes):
+                if not self._reported_codes(e) & set(spec.expected_codes):
                     wrong_code.add(spec.key)
         assert wrong_code == (
             self.REPORTED_AS_MISALIGNMENT | self.EXPECTED_CODE_NOT_REPORTED
@@ -883,7 +923,6 @@ class TestChatterErrorSpecs:
         spec's own code does not. rustling reports every diagnostic chatter
         produced, so the second half is checkable here and not merely implied.
         """
-        code_re = re.compile(r"E\d{3}")
         leaked = set()
         for i, spec in enumerate(self._enforced(error_specs)):
             if spec.claim != "subsumed":
@@ -891,7 +930,7 @@ class TestChatterErrorSpecs:
             try:
                 self._load(spec, tmp_path, i)
             except Exception as e:
-                if spec.code in set(code_re.findall(str(e))):
+                if spec.code in self._reported_codes(e):
                     leaked.add(spec.key)
         assert leaked == set()
 

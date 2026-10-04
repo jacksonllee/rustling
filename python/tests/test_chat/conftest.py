@@ -126,6 +126,11 @@ class ErrorSpec:
     # do not all behave alike, so baselines are keyed per example rather than
     # per file.
     example_index: int
+    # The transcript name the example is authored under, or ``None`` for an
+    # anonymous example. It is part of what the example asserts, not a label:
+    # E531 compares ``@Media`` against it, and chatter's E531 spec pairs
+    # examples that differ only in this name.
+    source: str | None = None
 
     @property
     def key(self) -> str:
@@ -207,6 +212,7 @@ def _parse_error_spec(path: Path, statuses: dict[str, str]) -> list[ErrorSpec]:
                 claim=claim_kind,
                 subsumed_by=tuple(subsumed_by),
                 example_index=len(specs),
+                source=example.get("source"),
             )
         )
     return specs
