@@ -624,7 +624,6 @@ pub trait BaseHiddenMarkovModel: Sized + Clone + Sync {
     fn fit_unlabeled(&mut self, sequences: Vec<Vec<String>>) {
         let sequences: Vec<Vec<String>> = sequences.into_iter().filter(|s| !s.is_empty()).collect();
         if sequences.is_empty() {
-            self.set_fitted(true);
             return;
         }
 
@@ -933,7 +932,6 @@ pub trait BaseHiddenMarkovModel: Sized + Clone + Sync {
             .collect();
 
         if pairs.is_empty() {
-            self.set_fitted(true);
             return Ok(());
         }
 
@@ -1385,6 +1383,41 @@ mod tests {
             vec!["b".into(), "a".into(), "b".into(), "b".into()],
             vec!["a".into(), "a".into(), "a".into(), "b".into()],
         ]
+    }
+
+    #[test]
+    fn test_empty_fit_preserves_unfitted_state() {
+        for labeled in [false, true] {
+            let mut model = HiddenMarkovModel::new(2, 3, 1e-6, 1.0, Some(42), None).unwrap();
+            let labels = if labeled { Some(vec![vec![]]) } else { None };
+            model.fit(vec![vec![]], labels).unwrap();
+            assert!(!model.fitted());
+            assert!(model.score(toy_sequences()).is_err());
+            assert!(model.predict(toy_sequences()).is_err());
+
+            model.fit(toy_sequences(), None).unwrap();
+            let mut reference = HiddenMarkovModel::new(2, 3, 1e-6, 1.0, Some(42), None).unwrap();
+            reference.fit(toy_sequences(), None).unwrap();
+            assert_eq!(model.log_initial, reference.log_initial);
+            assert_eq!(model.log_transition, reference.log_transition);
+            assert_eq!(model.feature_vocabs, reference.feature_vocabs);
+            assert_eq!(model.feature_log_emissions, reference.feature_log_emissions);
+        }
+    }
+
+    #[test]
+    fn test_empty_fit_preserves_trained_state() {
+        let mut model = HiddenMarkovModel::new(2, 3, 1e-6, 1.0, Some(42), None).unwrap();
+        model.fit(toy_sequences(), None).unwrap();
+        let reference = model.clone();
+        model.fit(vec![vec![]], None).unwrap();
+        model.fit(vec![vec![]], Some(vec![vec![]])).unwrap();
+        assert!(model.fitted());
+        assert_eq!(model.log_initial, reference.log_initial);
+        assert_eq!(model.log_transition, reference.log_transition);
+        assert_eq!(model.feature_vocabs, reference.feature_vocabs);
+        assert_eq!(model.feature_log_emissions, reference.feature_log_emissions);
+        assert_eq!(model.state_labels, reference.state_labels);
     }
 
     // --- logsumexp tests ---
