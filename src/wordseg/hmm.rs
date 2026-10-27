@@ -52,7 +52,6 @@ pub trait BaseHiddenMarkovModelSegmenter: Sized + Clone {
             labeled_sents.iter().filter(|s| !s.is_empty()).collect();
 
         if filtered.is_empty() {
-            self.hmm_mut().set_fitted(true);
             return;
         }
 
@@ -318,9 +317,27 @@ mod tests {
 
     #[test]
     fn test_fit_segmented_empty_data() {
-        let mut segmenter = HiddenMarkovModelSegmenter::new(None, None, None, None, None);
+        let mut segmenter = HiddenMarkovModelSegmenter::new(Some(3), None, None, Some(42), None);
         segmenter.fit_segmented(vec![]);
-        assert!(segmenter.hmm().fitted());
+        assert!(!segmenter.hmm().fitted());
+        assert_eq!(
+            segmenter.predict(vec!["你好".into()]),
+            vec![vec!["你".to_string(), "好".to_string()]]
+        );
+
+        let training = vec!["你好世界".into(), "世界你好".into()];
+        segmenter.fit_unsegmented(training.clone());
+        let mut reference = HiddenMarkovModelSegmenter::new(Some(3), None, None, Some(42), None);
+        reference.fit_unsegmented(training);
+        assert_eq!(segmenter.hmm().log_initial(), reference.hmm().log_initial());
+        assert_eq!(
+            segmenter.hmm().log_transition(),
+            reference.hmm().log_transition()
+        );
+        assert_eq!(
+            segmenter.hmm().feature_log_emissions(),
+            reference.hmm().feature_log_emissions()
+        );
     }
 
     #[test]
