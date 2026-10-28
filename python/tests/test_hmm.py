@@ -160,6 +160,21 @@ def test_fit_with_empty_sequences():
     assert len(result[0]) == 2
 
 
+@pytest.mark.parametrize("warm_start", [False, True])
+@pytest.mark.parametrize("n_iter", [1, 3, 10])
+def test_singleton_training_preserves_multi_token_inference(warm_start, n_iter):
+    model = HiddenMarkovModel(n_states=2, n_iter=n_iter, random_seed=42)
+    if warm_start:
+        model.fit(
+            [["a", "b", "a"], ["b", "a", "b"]],
+            labels=[["X", "Y", "X"], ["Y", "X", "Y"]],
+        )
+    model.fit([["a"], ["b"], ["a"]])
+    queries = [["a", "b"], ["b", "a", "b"]]
+    assert all(math.isfinite(score) for score in model.score(queries))
+    assert [len(p) for p in model.predict(queries)] == [2, 3]
+
+
 def test_save_and_load():
     """Test saving and loading a model."""
     model = HiddenMarkovModel(n_states=2, n_iter=10, random_seed=42)

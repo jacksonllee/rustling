@@ -802,6 +802,11 @@ pub trait BaseHiddenMarkovModel: Sized + Clone + Sync {
 
             for i in 0..n {
                 let row_total = logsumexp(&acc.log_trans_acc[i]);
+                // Singleton sequences provide no transition observations.
+                // Keep the existing row when its expected count is zero.
+                if row_total == f64::NEG_INFINITY {
+                    continue;
+                }
                 for j in 0..n {
                     self.log_transition_mut()[i][j] = acc.log_trans_acc[i][j] - row_total;
                 }
@@ -1385,6 +1390,52 @@ mod tests {
             vec!["b".into(), "a".into(), "b".into(), "b".into()],
             vec!["a".into(), "a".into(), "a".into(), "b".into()],
         ]
+    }
+
+    #[test]
+    fn test_singleton_em_retains_transitions() {
+        let mut model = HiddenMarkovModel::new(2, 3, 1e-6, 1.0, Some(42), None).unwrap();
+        model
+            .fit(
+                vec![vec!["a".into(), "b".into()], vec!["b".into(), "a".into()]],
+                Some(vec![
+                    vec!["X".into(), "Y".into()],
+                    vec!["Y".into(), "X".into()],
+                ]),
+            )
+            .unwrap();
+        let transitions = model.log_transition.clone();
+        model
+            .fit(
+                vec![vec!["a".into()], vec!["b".into()], vec!["a".into()]],
+                None,
+            )
+            .unwrap();
+        assert_eq!(model.log_transition, transitions);
+        let score = model.score(vec![vec!["a".into(), "b".into()]]).unwrap()[0];
+        assert!(score.is_finite());
+    }
+
+    #[test]
+    fn test_em_retains_only_unobserved_transition_rows() {
+        let mut model = HiddenMarkovModel::new(2, 1, 0.0, 1.0, Some(42), None).unwrap();
+        let sequence = vec!["a".into(), "b".into()];
+        model.build_vocab(std::slice::from_ref(&sequence));
+        model.log_initial = vec![0.0, f64::NEG_INFINITY];
+        model.log_transition = vec![vec![0.25_f64.ln(), 0.75_f64.ln()], vec![0.5_f64.ln(); 2]];
+        model.feature_log_emissions = vec![vec![
+            vec![0.0, f64::NEG_INFINITY],
+            vec![f64::NEG_INFINITY, 0.0],
+        ]];
+        model.fitted = true;
+        let terminal_row = model.log_transition[1].clone();
+        model.fit(vec![sequence], None).unwrap();
+        assert_eq!(model.log_transition[0], vec![f64::NEG_INFINITY, 0.0]);
+        assert_eq!(model.log_transition[1], terminal_row);
+        let score = model
+            .score(vec![vec!["a".into(), "b".into(), "b".into()]])
+            .unwrap()[0];
+        assert!((score - 0.5_f64.ln()).abs() < 1e-12);
     }
 
     // --- logsumexp tests ---
