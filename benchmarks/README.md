@@ -79,10 +79,10 @@ pylangacq (v0.19.1), hmmlearn (v0.3.3), pympi-ling (v1.70.2), and conllu (v6.0.0
 | **HMM** | Fit | **14x** | hmmlearn |
 |  | Predict | **0.9x** | hmmlearn |
 |  | Score | **5x** | hmmlearn |
-| **CHAT Parsing** | Reading from a ZIP archive | **30x** | pylangacq |
-|  | Reading from strings | **35x** | pylangacq |
-|  | Parsing utterances | **15x** | pylangacq |
-|  | Parsing tokens | **8x** | pylangacq |
+| **CHAT Parsing** | Reading from a ZIP archive | **8x** | pylangacq |
+|  | Reading from strings | **7x** | pylangacq |
+|  | Parsing utterances | **11x** | pylangacq |
+|  | Parsing tokens | **9x** | pylangacq |
 | **ELAN Parsing** | Parse single file | **4x** | pympi-ling |
 |  | Parse all files | **17x** | pympi-ling |
 | **TextGrid Parsing** | Parse single file | **3x** | pympi-ling |

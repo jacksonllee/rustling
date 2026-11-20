@@ -12,7 +12,7 @@ use super::reader::{
 };
 use super::utterance::Utterance;
 use super::utterance_py::{PyToken, PyUtterance, PyUtterances};
-use crate::chat::validation::{ValidationError, validate_chat_file};
+use crate::chat::from_chatter::ChatDiagnostic;
 use crate::ngram::{BaseNgrams, Ngrams, PyNgrams};
 use crate::persistence::pathbuf_to_string;
 
@@ -108,46 +108,162 @@ fn tier_keys(mor_tier: Option<&str>, gra_tier: Option<&str>) -> (Option<String>,
     }
 }
 
-/// Check collected misalignments and either raise or warn.
-fn handle_misalignments(
+/// How many problems a strict-mode error spells out before summarizing.
+///
+/// A whole-corpus load can produce thousands. The cap keeps the message
+/// readable, and the number left out is always stated, so a truncated report
+/// never reads as if it were the complete list.
+const MAX_REPORTED_PROBLEMS: usize = 50;
+
+/// One thing wrong with a loaded file, from either reporting channel.
+struct Problem {
+    file_path: String,
+    detail: String,
+    /// Which channel reported it: chatter's validator, or rustling's own
+    /// mor/word alignment check. The summary needs this to say what the cap
+    /// left out, since the two are not interchangeable to a caller.
+    is_misalignment: bool,
+}
+
+fn misalignment_detail(m: &MisalignmentInfo) -> String {
+    format!(
+        "mor/word misalignment (participant {})\n\
+         \x20      Main tier: {}\n\
+         \x20      {} tier: {}\n\
+         \x20      Words ({}): {}\n\
+         \x20      Non-clitic mor items ({}): {}",
+        m.participant,
+        m.main_tier,
+        m.mor_tier_name,
+        m.mor_tier_content,
+        m.word_count,
+        m.words.join(" "),
+        m.mor_count,
+        m.mor_labels.join(" "),
+    )
+}
+
+/// Report everything wrong with the loaded files.
+///
+/// Two independent channels feed this: chatter's diagnostics, and rustling's
+/// own mor/word alignment check. They are reported together rather than one
+/// after the other. Running the alignment check first, as rustling used to,
+/// meant an utterance that broke a chatter rule *and* came out misaligned was
+/// rejected under rustling's generic count message, so the rule actually broken
+/// never reached the user.
+///
+/// Under `strict`, every problem in every file is listed rather than only the
+/// first: "fix one, reload, find the next" is a poor way to clean a transcript.
+/// Outside strict mode misalignments warn as before, and chatter's diagnostics
+/// stay available on the reader rather than being raised.
+///
+/// `report_diagnostics` is false for the string APIs. Those accept bare
+/// utterance bodies, which cannot satisfy whole-file rules however well formed
+/// they are, so chatter's diagnostics are collected for inspection but only
+/// misalignment is raised. See [`PyChat::from_strs`].
+fn handle_problems(
+    chat: &Chat,
     misalignments: &[MisalignmentInfo],
     strict: bool,
+    report_diagnostics: bool,
+    mor_key: Option<&str>,
     py: Python<'_>,
 ) -> PyResult<()> {
-    if misalignments.is_empty() {
+    if !strict {
+        return warn_misalignments(misalignments, py);
+    }
+
+    // chatter's count mismatches are about `%mor`; rustling's misalignment
+    // channel is about whichever tier the caller selected. They only cover the
+    // same ground when that tier is `%mor`, which is the default but not the
+    // only option: with `mor_tier=None` or a `%x…` tier, rustling counts
+    // nothing about `%mor` and dropping chatter's diagnostic would leave the
+    // mismatch reported by nobody.
+    let misalignment_covers_mor = mor_key == Some("%mor");
+    let mut problems: Vec<Problem> = Vec::new();
+    if report_diagnostics {
+        for file in chat.files() {
+            for d in &file.diagnostics {
+                // `%mor`/word count mismatches belong to the misalignment
+                // channel, which reports them with the tier text alongside.
+                if !d.is_error || (d.is_mor_word_mismatch && misalignment_covers_mor) {
+                    continue;
+                }
+                problems.push(Problem {
+                    file_path: d.file_path.clone(),
+                    detail: format!("[{} {}] {}", d.code, d.name, d.message),
+                    is_misalignment: false,
+                });
+            }
+        }
+    }
+    for m in misalignments {
+        problems.push(Problem {
+            file_path: m.file_path.clone(),
+            detail: misalignment_detail(m),
+            is_misalignment: true,
+        });
+    }
+    if problems.is_empty() {
         return Ok(());
     }
 
-    if strict {
-        let mut msg = format!(
-            "Found {} utterance(s) with mor/word misalignment:\n",
-            misalignments.len()
-        );
-        for (i, m) in misalignments.iter().enumerate() {
-            msg.push_str(&format!(
-                "\n  {}. File: {}\n     Participant: {}\n     Main tier: {}\n\
-                 \x20    {} tier: {}\n     Words ({}): {}\n\
-                 \x20    Non-clitic mor items ({}): {}\n",
-                i + 1,
-                m.file_path,
-                m.participant,
-                m.main_tier,
-                m.mor_tier_name,
-                m.mor_tier_content,
-                m.word_count,
-                m.words.join(" "),
-                m.mor_count,
-                m.mor_labels.join(" "),
-            ));
-        }
-        msg.push_str(
-            "\nTo suppress this error and parse with empty tokens for \
-             misaligned utterances, pass strict=False.",
-        );
-        return Err(pyo3::exceptions::PyValueError::new_err(msg));
-    }
+    // Group by file before the cap below. The two channels are collected one
+    // after the other, so without this a load carrying `MAX_REPORTED_PROBLEMS`
+    // or more chatter diagnostics pushes every misalignment past the cut and
+    // reports none of them -- the opposite of listing both together. The sort
+    // is stable, so a file's chatter diagnostics still precede its
+    // misalignments.
+    problems.sort_by(|a, b| a.file_path.cmp(&b.file_path));
 
-    // strict=False: emit Python warnings.
+    let file_count = problems
+        .iter()
+        .map(|p| p.file_path.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let mut msg = format!(
+        "Found {} problem(s) in {} file(s):\n",
+        problems.len(),
+        file_count
+    );
+    for (i, p) in problems.iter().take(MAX_REPORTED_PROBLEMS).enumerate() {
+        msg.push_str(&format!(
+            "\n  {}. File: {}\n     {}\n",
+            i + 1,
+            p.file_path,
+            p.detail
+        ));
+    }
+    let hidden = &problems[problems.len().min(MAX_REPORTED_PROBLEMS)..];
+    if !hidden.is_empty() {
+        // Name the misalignments among the omitted ones. They are rustling's
+        // own channel and the rarer of the two, so a load carrying enough
+        // chatter diagnostics to fill the cap would otherwise report a bare
+        // count and leave no sign that any utterance was misaligned at all.
+        let hidden_misaligned = hidden.iter().filter(|p| p.is_misalignment).count();
+        let note = match hidden_misaligned {
+            0 => String::new(),
+            1 => " (1 of them a mor/word misalignment)".to_string(),
+            n => format!(" ({n} of them mor/word misalignments)"),
+        };
+        msg.push_str(&format!(
+            "\n  ... and {} more not shown{note}.\n",
+            hidden.len()
+        ));
+    }
+    msg.push_str(
+        "\nTo load anyway, pass strict=False: misaligned utterances then get \
+         empty tokens, raw tier data is preserved in utterance.tiers, and \
+         chatter's diagnostics remain available via the reader's `diagnostics`.",
+    );
+    Err(pyo3::exceptions::PyValueError::new_err(msg))
+}
+
+/// Lenient mode: misalignments become Python warnings, one per utterance.
+fn warn_misalignments(misalignments: &[MisalignmentInfo], py: Python<'_>) -> PyResult<()> {
+    if misalignments.is_empty() {
+        return Ok(());
+    }
     let warnings = py.import("warnings")?;
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs.set_item("stacklevel", 2)?;
@@ -183,30 +299,6 @@ fn chat_error_to_pyerr(e: ChatError) -> pyo3::PyErr {
         ChatError::Zip(e) => pyo3::exceptions::PyIOError::new_err(e),
         ChatError::Source(e) => e.into(),
     }
-}
-
-/// Validate all files in a Chat and return collected errors.
-fn validate_chat(chat: &Chat) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-    for file in chat.files() {
-        errors.extend(validate_chat_file(
-            &file.file_path,
-            &file.headers,
-            &file.events,
-            &file.raw_lines,
-        ));
-    }
-    errors
-}
-
-/// Check validation errors and either raise or silently pass.
-fn handle_validation_errors(errors: &[ValidationError], strict: bool) -> PyResult<()> {
-    if errors.is_empty() || !strict {
-        return Ok(());
-    }
-    // Raise the first validation error.
-    let msg = &errors[0].message;
-    Err(pyo3::exceptions::PyValueError::new_err(msg.clone()))
 }
 
 // ---------------------------------------------------------------------------
@@ -561,11 +653,18 @@ impl PyChat {
         }
         let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
         let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::from_strs(strs, ids, parallel, mor_key.as_deref(), gra_key.as_deref());
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        // String input is treated leniently (bare fragments are common and
+        // valid via `from_strs`), so chatter's file-level validation is not run;
+        // only mor/word misalignment is reported.
+        let (chat, misalignments) = Chat::from_strs(
+            strs,
+            ids,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+            false,
+        );
+        handle_problems(&chat, &misalignments, strict, false, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -607,12 +706,15 @@ impl PyChat {
             .collect::<PyResult<_>>()?;
         let (mor_key, gra_key) = tier_keys(mor_tier, gra_tier);
         let py = _cls.py();
-        let (chat, misalignments) =
-            Chat::read_files(&paths, parallel, mor_key.as_deref(), gra_key.as_deref())
-                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        let (chat, misalignments) = Chat::read_files(
+            &paths,
+            parallel,
+            mor_key.as_deref(),
+            gra_key.as_deref(),
+            strict,
+        )
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -646,11 +748,10 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -684,11 +785,10 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -729,11 +829,10 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -770,11 +869,10 @@ impl PyChat {
             parallel,
             mor_key.as_deref(),
             gra_key.as_deref(),
+            strict,
         )
         .map_err(chat_error_to_pyerr)?;
-        handle_misalignments(&misalignments, strict, py)?;
-        let validation_errors = validate_chat(&chat);
-        handle_validation_errors(&validation_errors, strict)?;
+        handle_problems(&chat, &misalignments, strict, true, mor_key.as_deref(), py)?;
         let result = Self { inner: chat };
         for f in result.inner.files() {
             f.cached_py_utterances(py);
@@ -794,6 +892,21 @@ impl PyChat {
     #[getter]
     fn n_files(&self) -> usize {
         self.num_files()
+    }
+
+    /// Diagnostics chatter reported for the loaded files.
+    ///
+    /// Populated whether or not the data was loaded with `strict=True`, so a
+    /// file that loaded leniently can still be inspected. Semantic validation
+    /// only runs under `strict=True`, so a lenient load reports parse-level
+    /// diagnostics only.
+    #[getter]
+    fn diagnostics(&self) -> Vec<ChatDiagnostic> {
+        self.inner
+            .files()
+            .iter()
+            .flat_map(|f| f.diagnostics.iter().cloned())
+            .collect()
     }
 
     /// Print a summary of this reader's data.

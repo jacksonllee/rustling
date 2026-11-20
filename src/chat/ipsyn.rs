@@ -239,8 +239,8 @@ fn is_punctuation_mor(mor: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 fn should_skip_utterance(graph: &DependencyGraph) -> bool {
-    for i in 1..graph.n_nodes() {
-        let w = graph.nodes[i].word.as_str();
+    for node in graph.nodes.iter().skip(1) {
+        let w = node.word.as_str();
         if w == "xxx" || w == "yyy" || w == "www" {
             return true;
         }
@@ -253,11 +253,11 @@ fn should_skip_utterance(graph: &DependencyGraph) -> bool {
 // ---------------------------------------------------------------------------
 
 fn score_n1(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::N1) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
+        let pos = node.pos.as_str();
         if is_noun_pos(pos) {
             board.add_point(Item::N1);
         }
@@ -268,11 +268,11 @@ fn score_n1(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_n2(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::N2) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
+        let pos = node.pos.as_str();
         if pos.starts_with("pro") && pos != "pro:poss:det" {
             board.add_point(Item::N2);
         }
@@ -283,11 +283,11 @@ fn score_n2(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_n3(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::N3) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
+        let pos = node.pos.as_str();
         if is_np_modifier_pos(pos) {
             board.add_point(Item::N3);
         }
@@ -358,11 +358,11 @@ fn score_n6(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_n7(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::N7) {
             break;
         }
-        let mor = graph.nodes[i].mor.as_str();
+        let mor = node.mor.as_str();
         if mor.contains("-PL") {
             board.add_point(Item::N7);
         }
@@ -441,13 +441,13 @@ fn score_n10(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_n11(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::N11) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
+        let pos = node.pos.as_str();
         if pos == "n" || pos == "adj" || pos.starts_with("n:") {
-            let mor = graph.nodes[i].mor.as_str();
+            let mor = node.mor.as_str();
             // Remove -PL, then check for remaining bound morphemes (marked by -)
             let stripped = mor.replace("-PL", "");
             if stripped.contains('-') {
@@ -465,11 +465,11 @@ fn score_n11(graph: &DependencyGraph, board: &mut ScoringBoard) {
 // ---------------------------------------------------------------------------
 
 fn score_v1(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V1) {
             break;
         }
-        if graph.nodes[i].pos == "v" {
+        if node.pos == "v" {
             board.add_point(Item::V1);
         }
         if board.turn_off(Item::V1) {
@@ -479,11 +479,11 @@ fn score_v1(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v2(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V2) {
             break;
         }
-        if graph.nodes[i].pos == "prep" {
+        if node.pos == "prep" {
             board.add_point(Item::V2);
         }
         if board.turn_off(Item::V2) {
@@ -493,11 +493,11 @@ fn score_v2(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v3(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for dep in 1..graph.n_nodes() {
+    for rel in graph.dep_to_rel.iter().skip(1) {
         if board.is_stopped(Item::V3) {
             break;
         }
-        if graph.dep_to_rel[dep] == "POBJ" {
+        if rel == "POBJ" {
             board.add_point(Item::V3);
             board.credit(Item::V2);
         }
@@ -581,12 +581,12 @@ fn score_v5(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v6(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V6) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
-        let mor = graph.nodes[i].mor.as_str();
+        let pos = node.pos.as_str();
+        let mor = node.mor.as_str();
         let lemma = get_lemma_from_mor(mor);
         if (pos == "aux" && !mor.starts_with("wi")) || (lemma == "do" && pos == "mod") {
             board.add_point(Item::V6);
@@ -599,11 +599,11 @@ fn score_v6(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v7(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V7) {
             break;
         }
-        if graph.nodes[i].mor.ends_with("PRESP") {
+        if node.mor.ends_with("PRESP") {
             board.add_point(Item::V7);
         }
         if board.turn_off(Item::V7) {
@@ -613,11 +613,11 @@ fn score_v7(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v8(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V8) {
             break;
         }
-        if graph.nodes[i].pos == "adv" {
+        if node.pos == "adv" {
             board.add_point(Item::V8);
         }
         if board.turn_off(Item::V8) {
@@ -648,11 +648,11 @@ fn score_v9(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v10(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V10) {
             break;
         }
-        if graph.nodes[i].mor.contains("-3S") {
+        if node.mor.contains("-3S") {
             board.add_point(Item::V10);
         }
         if board.turn_off(Item::V10) {
@@ -663,15 +663,15 @@ fn score_v10(graph: &DependencyGraph, board: &mut ScoringBoard) {
 
 fn score_v11(graph: &DependencyGraph, board: &mut ScoringBoard) {
     const PAST_MODALS: &[&str] = &["could", "did", "might", "would", "wouldn't"];
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V11) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
+        let pos = node.pos.as_str();
         if pos != "mod" {
             continue;
         }
-        let word = graph.nodes[i].word.as_str();
+        let word = node.word.as_str();
         if PAST_MODALS.contains(&word) {
             board.add_point(Item::V11);
             board.credit(Item::V9);
@@ -683,11 +683,11 @@ fn score_v11(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v12(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V12) {
             break;
         }
-        let mor = graph.nodes[i].mor.as_str();
+        let mor = node.mor.as_str();
         if mor.contains("-PAST") && !mor.contains("-PASTP") {
             board.add_point(Item::V12);
         }
@@ -698,12 +698,12 @@ fn score_v12(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v13(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V13) {
             break;
         }
-        let mor = graph.nodes[i].mor.as_str();
-        let pos = graph.nodes[i].pos.as_str();
+        let mor = node.mor.as_str();
+        let pos = node.pos.as_str();
         if mor.contains("&PAST") && (pos == "aux" || pos == "mod") {
             board.add_point(Item::V13);
             board.credit(Item::V6);
@@ -719,11 +719,11 @@ fn score_v14(graph: &DependencyGraph, board: &mut ScoringBoard) {
     if graph.n_nodes() <= 2 {
         return;
     }
-    for i in 2..graph.n_nodes() - 1 {
+    for node in &graph.nodes[2..graph.n_nodes() - 1] {
         if board.is_stopped(Item::V14) {
             break;
         }
-        if graph.nodes[i].pos == "adv" {
+        if node.pos == "adv" {
             board.add_point(Item::V14);
             board.credit(Item::V8);
         }
@@ -762,12 +762,12 @@ fn score_v15(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_v16(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::V16) {
             break;
         }
-        let pos = graph.nodes[i].pos.as_str();
-        let mor = graph.nodes[i].mor.as_str();
+        let pos = node.pos.as_str();
+        let mor = node.mor.as_str();
         if pos.starts_with("cop") && mor.contains("PAST") {
             board.add_point(Item::V16);
             board.credit(Item::V4);
@@ -893,8 +893,8 @@ fn score_q5(graph: &DependencyGraph, board: &mut ScoringBoard) {
             continue;
         }
         // Check for negation between subject and verb
-        for j in (dep + 1)..head {
-            if graph.nodes[j].pos == "neg" {
+        for node in graph.nodes.iter().take(head).skip(dep + 1) {
+            if node.pos == "neg" {
                 board.add_point(Item::Q5);
                 board.credit(Item::Q3);
                 break;
@@ -1009,11 +1009,11 @@ fn score_q8(graph: &DependencyGraph, board: &mut ScoringBoard) {
 
 fn score_q9(graph: &DependencyGraph, board: &mut ScoringBoard) {
     const WH_WORDS: &[&str] = &["why", "when", "which", "whose"];
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::Q9) {
             break;
         }
-        let word = graph.nodes[i].word.as_str();
+        let word = node.word.as_str();
         if WH_WORDS.contains(&word) {
             board.add_point(Item::Q9);
         }
@@ -1148,11 +1148,11 @@ fn score_s4(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_s5(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::S5) {
             break;
         }
-        if graph.nodes[i].pos == "conj" {
+        if node.pos == "conj" {
             board.add_point(Item::S5);
         }
         if board.turn_off(Item::S5) {
@@ -1278,12 +1278,12 @@ fn score_s9(graph: &DependencyGraph, board: &mut ScoringBoard) {
 
 fn score_s10(graph: &DependencyGraph, board: &mut ScoringBoard) {
     const EXCEPTIONS: &[&str] = &["and", "or", "then"];
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::S10) {
             break;
         }
-        let word = graph.nodes[i].word.as_str();
-        let pos = graph.nodes[i].pos.as_str();
+        let word = node.word.as_str();
+        let pos = node.pos.as_str();
         if pos == "conj" && !EXCEPTIONS.contains(&word) {
             board.add_point(Item::S10);
             board.credit(Item::S5);
@@ -1439,8 +1439,8 @@ fn score_s16(graph: &DependencyGraph, board: &mut ScoringBoard) {
         }
         // Check that "and" is not between head and dep
         let mut has_and = false;
-        for j in (head + 1)..dep {
-            if graph.nodes[j].word == "and" {
+        for node in graph.nodes.iter().take(dep).skip(head + 1) {
+            if node.word == "and" {
                 has_and = true;
                 break;
             }
@@ -1493,11 +1493,11 @@ fn score_s17(graph: &DependencyGraph, board: &mut ScoringBoard) {
 }
 
 fn score_s18(graph: &DependencyGraph, board: &mut ScoringBoard) {
-    for i in 1..graph.n_nodes() {
+    for node in graph.nodes.iter().skip(1) {
         if board.is_stopped(Item::S18) {
             break;
         }
-        if graph.nodes[i].pos == "n:gerund" {
+        if node.pos == "n:gerund" {
             board.add_point(Item::S18);
             board.credit(Item::V7);
         }

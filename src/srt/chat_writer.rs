@@ -126,7 +126,8 @@ mod tests {
         let chat_str = srt_file_to_chat_str(&file);
 
         // Parse the generated CHAT string.
-        let (chat, _) = crate::chat::Chat::from_strs(vec![chat_str], None, false, None, None);
+        let (chat, _) =
+            crate::chat::Chat::from_strs(vec![chat_str], None, false, None, None, false);
         let files = chat.files();
         assert_eq!(files.len(), 1);
 

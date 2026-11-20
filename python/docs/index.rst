@@ -85,8 +85,6 @@ For Pyodide, pre-built WASM wheels (with multithreading disabled, as Pyodide doe
 are available from each `GitHub release <https://github.com/jacksonllee/rustling/releases>`_
 — look for the ``.whl`` file with ``emscripten`` in the filename.
 
-Rustling is also available in `Rust <https://docs.rs/rustling>`_.
-
 
 Performance
 -----------

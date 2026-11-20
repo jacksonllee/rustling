@@ -1,7 +1,10 @@
 """Tests for rustling.chat.CHAT."""
 
 import datetime
+import re
 import warnings
+import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -585,109 +588,64 @@ class TestLeadingWhitespace:
 
 
 class TestFromDir:
-    def test_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         assert reader.n_files > 0
 
-    def test_from_dir_with_path(self, testchat_good_dir):
+    def test_from_dir_with_path(self, reference_corpus_dir):
         """from_dir accepts pathlib.Path directly."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(testchat_good_dir, strict=False)
+        reader = CHAT.from_dir(reference_corpus_dir, strict=False)
         assert reader.n_files > 0
 
-    def test_from_dir_with_match(self, testchat_good_dir):
-        reader = CHAT.from_dir(str(testchat_good_dir), match="action")
+    def test_from_dir_is_recursive(self, reference_corpus_dir, reference_corpus_files):
+        """The reference corpus is nested by topic, so from_dir must recurse."""
+        reader = CHAT.from_dir(reference_corpus_dir, strict=False)
+        assert reader.n_files == len(reference_corpus_files)
+
+    def test_from_dir_with_match(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), match="child")
         paths = reader.file_paths
         assert len(paths) > 0
-        assert all("action" in p for p in paths)
+        assert all("child" in p for p in paths)
 
-    def test_utterances_from_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_utterances_from_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         utts = reader.utterances()
         assert len(utts) > 0
 
-    def test_words_from_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_words_from_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         words = reader.words()
         assert len(words) > 0
 
-    def test_testchat_strict_compliance(self, testchat_good_dir):
-        """Report which testchat/good files would fail strict=True."""
-        try:
-            CHAT.from_dir(str(testchat_good_dir), strict=True)
-        except ValueError as e:
-            warnings.warn(
-                f"testchat/good files failing strict=True:\n\n{e}",
-                stacklevel=1,
-            )
+    def test_reference_corpus_parses_strict(
+        self, reference_corpus_dir, reference_corpus_files
+    ):
+        """Every file in chatter's reference corpus must load with strict=True.
 
-    def test_testchat_bad_files_catch_errors(self, testchat_bad_dir):
-        """Every testchat/bad file must raise a parsing error with strict=True."""
-        # Files requiring complex cross-tier or context-dependent checks
-        # not yet implemented (Tier 3+4 validation rules).
-        known_exceptions = {
-            # Cross-tier checks (%mor, %gra, %pho):
-            "mor-commas.cha",
-            "mor-empty.cha",
-            "latetalkers.cha",
-            "mornumber-spanish.cha",
-            "mornumber-spanish-2.cha",
-            "pho-group-compound.cha",
-            "pho-repetition.cha",
-            "pho-repetition-bad.cha",
-            # Media status vs bullet validation:
-            "media-needs-bullets.cha",
-            "media-notrans-bullets.cha",
-            "media-unlinked-bullets.cha",
-            # Retrace followed-by-content checks:
-            "retrace-in-group-bad.cha",
-            "retrace-multiple-no-following.cha",
-            "retrace-no-following-content.cha",
-            # Quotation nesting:
-            "quotation-nested.cha",
-            # Language-level checks:
-            "language-different-speakers.cha",
-            "zho-f.cha",
-            # CA segment repetition:
-            "ca-segment-repetition.cha",
-            "ca-segment-repetition-bad-content.cha",
-            # [x N] bracket context:
-            "repetition.cha",
-            "grouprepetition.cha",
-            "x-repetition.cha",
-            # @Options sign/heritage/bullet required:
-            "sign.cha",
-            "words-sign.cha",
-            "heritage.cha",
-            "heritage-lsfal14a.cha",
-            "bs5.cha",
-            # Participant code edge cases:
-            "who.cha",
-            # Other:
-            "zero-others.cha",
-            "space-bracket.cha",
-        }
-        no_error_files = []
-        for path in sorted(testchat_bad_dir.glob("*.cha")):
-            if path.name in known_exceptions:
-                continue
-            try:
-                CHAT.from_files([str(path)], strict=True)
-            except Exception:
-                pass
-            else:
-                no_error_files.append(path.name)
-        assert not no_error_files, (
-            f"{len(no_error_files)} testchat/bad files that raised no parsing error:\n"
-            + "\n".join(no_error_files)
+        The reference corpus is chatter's own 100%-pass gate: each file is
+        constructed to exercise a CHAT construct and both of chatter's parsers
+        must agree on all of them. So a failure here is rustling's, not
+        chatter's -- either in the adapter or in what rustling does to the
+        source before handing it over.
+
+        The one exception is a file whose ``@Media`` names something other
+        than the file itself (every other reference file names its own stem),
+        so E531 fires on it when it is loaded under its own name. It must fail
+        on that and nothing else, and stops being exempt once it is fixed.
+        """
+        media_mismatch = {"timed-gem-exterior.cha"}
+        assert len(reference_corpus_files) > 0
+        assert media_mismatch <= {p.name for p in reference_corpus_files}
+        CHAT.from_files(
+            [p for p in reference_corpus_files if p.name not in media_mismatch],
+            strict=True,
         )
+        for p in reference_corpus_files:
+            if p.name in media_mismatch:
+                with pytest.raises(ValueError) as exc_info:
+                    CHAT.from_files([p], strict=True)
+                assert set(re.findall(r"\[(E\d{3}) ", str(exc_info.value))) == {"E531"}
 
     def test_private_data_strict_compliance(self, private_data_dir):
         """Report which private test data files would fail strict=True."""
@@ -700,35 +658,394 @@ class TestFromDir:
             )
 
 
+class TestProblemReporting:
+    """strict=True reports every problem; lenient loads still expose them."""
+
+    # Two distinct faults in one file: an unknown annotation on the first
+    # utterance, and a %mor tier one item short on the second.
+    TWO_FAULTS = (
+        "@UTF8\n@Begin\n@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|corpus|CHI|2;00.00||||Target_Child|||\n"
+        "*CHI:\tthe dog [@@@] .\n"
+        "*CHI:\tthe big dog .\n"
+        "%mor:\tdet:art|the n|dog .\n"
+        "@End\n"
+    )
+
+    def _write(self, tmp_path, text):
+        path = tmp_path / "two_faults.cha"
+        path.write_text(text)
+        return str(path)
+
+    def test_strict_reports_both_channels_at_once(self, tmp_path):
+        """A chatter diagnostic no longer hides behind the misalignment report.
+
+        The alignment check used to run first and raise on its own, so the
+        rule that was actually broken never reached the user.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([self._write(tmp_path, self.TWO_FAULTS)], strict=True)
+        message = str(excinfo.value)
+        assert re.search(r"E\d{3}", message), message
+        assert "misalignment" in message
+        assert "Found 2 problem(s) in 1 file(s)" in message
+
+    def test_lenient_load_still_exposes_diagnostics(self, tmp_path):
+        """strict=False loads the file and keeps the diagnostics available."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_files(
+                [self._write(tmp_path, self.TWO_FAULTS)], strict=False
+            )
+        assert reader.n_files == 1
+        codes = {d.code for d in reader.diagnostics}
+        assert codes, "lenient load reported no diagnostics"
+        assert all(d.code.startswith("E") for d in reader.diagnostics)
+        assert all(d.file_path for d in reader.diagnostics)
+
+    def test_diagnostic_repr_and_fields(self, tmp_path):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            reader = CHAT.from_files(
+                [self._write(tmp_path, self.TWO_FAULTS)], strict=False
+            )
+        d = reader.diagnostics[0]
+        assert isinstance(d.code, str) and isinstance(d.name, str)
+        assert isinstance(d.is_error, bool) and isinstance(d.message, str)
+        assert "Diagnostic(code=" in repr(d)
+
+    def test_clean_file_has_no_diagnostics(self, reference_corpus_files):
+        reader = CHAT.from_files(reference_corpus_files[:5], strict=True)
+        assert reader.diagnostics == []
+
+    # A %mor count mismatch is normally reported through rustling's own
+    # misalignment channel, so chatter's E705/E706 is suppressed to avoid
+    # naming it twice. That channel only counts the tier the caller selected,
+    # so pointing it away from %mor -- or switching it off -- used to leave the
+    # mismatch reported by nobody and the file silently accepted.
+    @pytest.mark.parametrize("mor_tier", [None, "%zzz"])
+    def test_mor_mismatch_still_reported_when_channel_is_elsewhere(
+        self, tmp_path, mor_tier
+    ):
+        path = self._write(tmp_path, self.TWO_FAULTS)
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([path], strict=True, mor_tier=mor_tier)
+        assert re.search(r"E70[56]", str(excinfo.value)), str(excinfo.value)
+
+    def test_mor_mismatch_not_reported_twice_by_default(self, tmp_path):
+        """The default %mor selection still routes through misalignment only."""
+        path = self._write(tmp_path, self.TWO_FAULTS)
+        with pytest.raises(ValueError) as excinfo:
+            CHAT.from_files([path], strict=True)
+        message = str(excinfo.value)
+        assert "misalignment" in message
+        assert not re.search(r"E70[56]", message), message
+
+
+class TestChatterErrorSpecs:
+    """strict=True must reject the invalid CHAT that chatter's specs describe.
+
+    Each example in ``spec/errors`` states a ``claim`` about itself, and the
+    claim is a two-sided contract: ``violates`` means the spec's own code must
+    fire, ``subsumed`` names the more general codes that fire *instead* and
+    asserts the spec's own code does not, and ``legal`` means the spec's own
+    code must not fire.
+
+    A ``legal`` example is legal *with respect to its own rule*, which is
+    weaker than being clean: several deliberately break some other rule while
+    demonstrating that this one is satisfied (E758's separator examples include
+    a `%mor` tier with an empty POS, which is E760). The gate for "rustling
+    loads valid CHAT" is the reference corpus, not these examples.
+
+    The baselines below are compared for exact equality rather than as
+    allowlists. An entry that starts passing is as much a change worth seeing
+    as one that starts failing, and this branch tracks chatter closely enough
+    that either should be noticed at the next version bump.
+    """
+
+    # Statuses describing a rule that chatter does not enforce from CHAT input
+    # today, so no failure is expected from its example.
+    UNENFORCED_STATUSES = frozenset(
+        {"not_implemented", "deprecated", "unreachable_from_chat"}
+    )
+
+    # Examples that load cleanly. Verified against chatter's own API to
+    # establish which side each one is on.
+    NO_ERROR_RAISED = {
+        # chatter reports E603 as a Warning, and strict=True raises only on
+        # errors, so accepting this is the intended behaviour.
+        "E603.md#0",
+        # Added in chatter 0.34.0 (an invalid `%tim` range start / end), and
+        # reported as the same Warning.
+        "E603.md#2",
+        "E603.md#3",
+        # Cross-utterance quotation and completion linkers. These rules are
+        # implemented, but only run under chatter's opt-in
+        # `RuleSelection::with_strict_linkers`, which rustling deliberately
+        # does not enable: chatter keeps it off by default because real
+        # corpora (CORAAL, OralArguments) do not follow the strict quotation
+        # sequence, so turning it on would reject valid transcripts wholesale.
+        # rustling's verdict on these examples is unchanged -- it accepted
+        # them under the previous pin too; what moved is the registry, which
+        # reclassified all eight codes from `not_implemented` to
+        # `implemented`, so they enter the enforced set for the first time.
+        # The status vocabulary cannot say "implemented but opt-in", which is
+        # why these need naming here rather than falling to
+        # UNENFORCED_STATUSES.
+        "E341.md#0",
+        "E341.md#1",
+        "E344.md#0",
+        "E346.md#0",
+        "E351.md#0",
+        "E352.md#0",
+        "E353.md#0",
+        "E354.md#0",
+        "E355.md#0",
+        # Added in chatter 0.26.0, and their notes name the same opt-in policy.
+        "E341.md#3",
+        "E344.md#3",
+        "E352.md#2",
+        "E354.md#3",
+        # Added in chatter 0.28.0, likewise.
+        "E346.md#3",
+    }
+
+    # Rejected, but through rustling's mor/word misalignment channel, which
+    # reports the counts and tier text instead of a code. Both codes here are
+    # exactly the two rustling routes that way on purpose (E705 is
+    # MorCountMismatchTooFew, E706 MorCountMismatchTooMany), so this set is by
+    # design rather than a gap.
+    REPORTED_AS_MISALIGNMENT = {
+        "E705.md#0",
+        "E705.md#1",
+        "E706.md#0",
+        "E706.md#1",
+        "E706.md#2",
+        "E706.md#3",
+        # Added in chatter 0.34.0: a post-clitic and an independent MOR item
+        # traded places, which shifts the non-clitic item count.
+        "E705_mor_gra_combinations.md#1",
+        "E706_mor_gra_combinations.md#1",
+    }
+
+    # Rejected, and every diagnostic chatter produced is reported, but the code
+    # the example claims is not among them: these fixtures trip different rules
+    # than the claim expects.
+    EXPECTED_CODE_NOT_REPORTED = {
+        # Added in chatter 0.34.0. chatter emits the E324 the example's notes
+        # name as its authored witness (an Error) and E600 itself only as a
+        # Warning, which strict=True does not raise on.
+        "E600.md#1",
+        # The strict-linker rule again (see NO_ERROR_RAISED), on an utterance
+        # that also lacks a terminator, so only E305 fires. The example's own
+        # notes predict that E305.
+        "E354.md#2",
+    }
+
+    # `legal` examples whose code fires only because the transcript was given
+    # a name. This one has none by design -- it asserts that anonymous input
+    # cannot mismatch its `@Media` -- but every rustling loader that validates
+    # a whole transcript reads it from a named file, so the harness has to
+    # invent one. The string APIs, the only anonymous input, skip file-level
+    # validation.
+    NAMED_WHEN_ANONYMOUS = {
+        "E531.md#4",
+    }
+
+    def _enforced(self, error_specs):
+        return [s for s in error_specs if s.status not in self.UNENFORCED_STATUSES]
+
+    @staticmethod
+    def _load(spec, tmp_path, index):
+        # The file name is not incidental: from_files hands it to chatter as
+        # the transcript's name, so a fixture whose `@Media` header names
+        # something else trips E531 on top of the rule it was written for.
+        # An example authored under a name is loaded under that name, in a
+        # directory of its own so two examples sharing one cannot collide.
+        # An anonymous example still has to be given a name, since every
+        # loader that validates a whole transcript reads it from a file.
+        name = Path(spec.source).name if spec.source else f"spec_{index}.cha"
+        path = tmp_path / str(index) / name
+        path.parent.mkdir()
+        path.write_text(spec.chat)
+        CHAT.from_files([str(path)], strict=True)
+
+    @staticmethod
+    def _reported_codes(error):
+        # Only the `[E### Name]` prefix of each reported problem. A bare
+        # `E\d{3}` also matches inside message text, e.g. a `@Media` name like
+        # `E744_3` quoted in an E531 message.
+        return set(re.findall(r"\[(E\d{3}) ", str(error)))
+
+    def test_specs_were_extracted(self, error_specs):
+        """Guard against a spec-format change silently emptying these tests."""
+        assert len(self._enforced(error_specs)) > 200
+
+    def test_invalid_examples_are_rejected(self, error_specs, tmp_path):
+        accepted = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim == "legal":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception:
+                continue
+            accepted.add(spec.key)
+        assert accepted == self.NO_ERROR_RAISED
+
+    def test_legal_example_does_not_report_its_code(self, error_specs, tmp_path):
+        """A ``legal`` example asserts its spec's own code does not fire.
+
+        That is the whole claim -- chatter's spec vocabulary defines it as "the
+        own code MUST NOT appear" -- so this deliberately does not require a
+        clean load. Several legal examples break an unrelated rule on purpose
+        while satisfying the one they document.
+        """
+        leaked = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim != "legal":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if spec.code in self._reported_codes(e):
+                    leaked.add(spec.key)
+        assert leaked == self.NAMED_WHEN_ANONYMOUS
+
+    def test_expected_error_code_is_reported(self, error_specs, tmp_path):
+        wrong_code = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim == "legal":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if not self._reported_codes(e) & set(spec.expected_codes):
+                    wrong_code.add(spec.key)
+        assert wrong_code == (
+            self.REPORTED_AS_MISALIGNMENT | self.EXPECTED_CODE_NOT_REPORTED
+        )
+
+    def test_subsumed_code_is_not_reported(self, error_specs, tmp_path):
+        """The negative half of a ``subsumed_by`` claim.
+
+        Such an example asserts that a more general rule fires *and* that the
+        spec's own code does not. rustling reports every diagnostic chatter
+        produced, so the second half is checkable here and not merely implied.
+        """
+        leaked = set()
+        for i, spec in enumerate(self._enforced(error_specs)):
+            if spec.claim != "subsumed":
+                continue
+            try:
+                self._load(spec, tmp_path, i)
+            except Exception as e:
+                if spec.code in self._reported_codes(e):
+                    leaked.add(spec.key)
+        assert leaked == set()
+
+
+class TestFromZip:
+    """A zip entry is a whole transcript, so it is validated like one."""
+
+    # Faults only a whole-transcript read can see: no `@UTF8`/`@Begin`/`@End`
+    # envelope, so a reader that wraps the input in a synthetic one hides them.
+    NO_ENVELOPE = (
+        "@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "*CHI:\thi .\n"
+    )
+    # `@Media` names something other than the transcript, which only a reader
+    # that knows the transcript's own name can report (E531).
+    MEDIA_MISMATCH = (
+        "@UTF8\n@Begin\n@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "@Media:\tsomethingelse, audio\n"
+        "*CHI:\thi .\n@End\n"
+    )
+
+    @staticmethod
+    def _codes(load):
+        try:
+            load()
+        except ValueError as e:
+            return set(re.findall(r"E\d{3}", str(e)))
+        return set()
+
+    @pytest.mark.parametrize("body", [NO_ENVELOPE, MEDIA_MISMATCH])
+    def test_zip_is_as_strict_as_files(self, tmp_path, body):
+        path = tmp_path / "t.cha"
+        path.write_text(body)
+        archive = tmp_path / "t.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("t.cha", body)
+
+        from_files = self._codes(lambda: CHAT.from_files([str(path)], strict=True))
+        from_zip = self._codes(lambda: CHAT.from_zip(str(archive), strict=True))
+        assert from_files, "fixture stopped being invalid"
+        assert from_zip == from_files
+
+
+class TestDamagedTranscripts:
+    """A transcript missing part of its envelope still yields its utterances.
+
+    Lenient loading exists for real corpora, where a file cut off mid-transfer
+    or written without `@UTF8` is an ordinary thing to meet. Both shapes
+    returned an empty reader for part of this branch's life -- the whole
+    document was discarded over a fault in its envelope -- and no test here
+    noticed when that changed, in either direction.
+    """
+
+    BODY = (
+        "@Languages:\teng\n"
+        "@Participants:\tCHI Target_Child\n"
+        "@ID:\teng|test|CHI|||||Target_Child|||\n"
+        "*CHI:\thello world .\n"
+    )
+
+    @staticmethod
+    def _words(path):
+        reader = CHAT.from_files([str(path)], strict=False)
+        return [[t.word for t in u.tokens] for u in reader.utterances()]
+
+    def test_truncated_file_keeps_its_last_utterance(self, tmp_path):
+        # No `@End` and no final newline: the shape a truncated file has.
+        path = tmp_path / "t.cha"
+        path.write_text("@UTF8\n@Begin\n" + self.BODY.rstrip("\n"))
+        assert self._words(path) == [["hello", "world", "."]]
+        with pytest.raises(ValueError, match="E502"):
+            CHAT.from_files([str(path)], strict=True)
+
+    def test_file_without_utf8_header_keeps_its_utterances(self, tmp_path):
+        path = tmp_path / "t.cha"
+        path.write_text("@Begin\n" + self.BODY + "@End\n")
+        assert self._words(path) == [["hello", "world", "."]]
+        # The one missing header is reported, without cascading into claims
+        # that the headers the file does carry are absent.
+        with pytest.raises(ValueError, match="E503"):
+            CHAT.from_files([str(path)], strict=True)
+
+
 class TestFromFiles:
-    def test_from_files(self, testchat_good_dir):
-        import glob
+    def test_from_files(self, reference_corpus_files):
+        cha_files = [str(p) for p in reference_corpus_files[:3]]
+        reader = CHAT.from_files(cha_files, strict=False)
+        assert reader.n_files == len(cha_files)
 
-        cha_files = sorted(glob.glob(str(testchat_good_dir / "*.cha")))[:3]
-        if cha_files:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(cha_files, strict=False)
-            assert reader.n_files == len(cha_files)
-
-    def test_from_files_with_path(self, testchat_good_dir):
+    def test_from_files_with_path(self, reference_corpus_files):
         """from_files accepts pathlib.Path objects in the list."""
-        paths = sorted(testchat_good_dir.glob("*.cha"))[:3]
-        if paths:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(paths, strict=False)
-            assert reader.n_files == len(paths)
+        paths = reference_corpus_files[:3]
+        reader = CHAT.from_files(paths, strict=False)
+        assert reader.n_files == len(paths)
 
-    def test_from_files_mixed_str_and_path(self, testchat_good_dir):
+    def test_from_files_mixed_str_and_path(self, reference_corpus_files):
         """from_files accepts a mix of str and pathlib.Path."""
-        all_paths = sorted(testchat_good_dir.glob("*.cha"))[:2]
-        if len(all_paths) >= 2:
-            mixed = [str(all_paths[0]), all_paths[1]]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                reader = CHAT.from_files(mixed, strict=False)
-            assert reader.n_files == 2
+        first, second = reference_corpus_files[:2]
+        reader = CHAT.from_files([str(first), second], strict=False)
+        assert reader.n_files == 2
 
 
 class TestAppend:
@@ -1079,12 +1396,10 @@ class TestToStrs:
         reader = CHAT.from_strs([])
         assert reader.to_strs() == []
 
-    def test_to_strs_round_trip_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
-            strs = reader.to_strs()
-            reader2 = CHAT.from_strs(strs, strict=False)
+    def test_to_strs_round_trip_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
+        strs = reader.to_strs()
+        reader2 = CHAT.from_strs(strs, strict=False)
         assert reader.words() == reader2.words()
 
 
@@ -1093,7 +1408,9 @@ class TestToFiles:
         reader = CHAT.from_strs([BASIC_CHAT])
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.words() == reader.words()
 
     def test_to_files_with_path(self, tmp_path):
@@ -1101,14 +1418,18 @@ class TestToFiles:
         reader = CHAT.from_strs([BASIC_CHAT])
         out_dir = tmp_path / "output"
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.words() == reader.words()
 
     def test_to_files_directory(self, tmp_path):
         reader = CHAT.from_strs(TWO_FILES, ids=["a", "b"])
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
-        reader2 = CHAT.from_dir(out_dir)
+        # strict=False: BASIC_CHAT/TWO_FILES omit @ID/@Languages, which chatter's
+        # validation flags; this round-trip only checks content fidelity.
+        reader2 = CHAT.from_dir(out_dir, strict=False)
         assert reader2.n_files == 2
 
     def test_to_files_custom_filenames(self, tmp_path):
@@ -1148,12 +1469,10 @@ class TestToFiles:
                 filenames=["only_one.cha"],
             )
 
-    def test_to_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+    def test_to_files_preserves_filenames(self, reference_corpus_dir, tmp_path):
         import os
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_files(out_dir)
         # Filenames should be derived from original file paths.
@@ -1161,13 +1480,18 @@ class TestToFiles:
             expected = os.path.splitext(os.path.basename(fp))[0] + ".cha"
             assert os.path.exists(os.path.join(out_dir, expected)), expected
 
-    def test_to_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
-            out_dir = str(tmp_path / "output")
-            reader.to_files(out_dir)
-            reader2 = CHAT.from_dir(out_dir, strict=False)
+    def test_to_files_round_trip_real_files(self, reference_corpus_files, tmp_path):
+        # from_dir orders files by full path, but the reference corpus is nested
+        # by topic and to_files writes one flat directory, so reading the output
+        # back with from_dir would compare the two sides in different orders.
+        # Drive both from the same basename ordering instead.
+        paths = sorted(reference_corpus_files, key=lambda p: p.name)
+        reader = CHAT.from_files(paths, strict=False)
+        out_dir = tmp_path / "output"
+        reader.to_files(str(out_dir))
+        written = sorted(out_dir.glob("*.cha"), key=lambda p: p.name)
+        assert len(written) == len(paths)
+        reader2 = CHAT.from_files(written, strict=False)
         assert reader.words() == reader2.words()
 
 
@@ -1255,12 +1579,10 @@ class TestToElan:
         assert os.path.exists(os.path.join(out_dir, "0001.eaf"))
         assert os.path.exists(os.path.join(out_dir, "0002.eaf"))
 
-    def test_to_elan_files_preserves_filenames(self, testchat_good_dir, tmp_path):
+    def test_to_elan_files_preserves_filenames(self, reference_corpus_dir, tmp_path):
         import os
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_elan_files(out_dir)
         # Filenames should be derived from original .cha paths with .eaf extension.
@@ -1268,12 +1590,10 @@ class TestToElan:
             expected = os.path.splitext(os.path.basename(fp))[0] + ".eaf"
             assert os.path.exists(os.path.join(out_dir, expected)), expected
 
-    def test_to_elan_files_round_trip_real_files(self, testchat_good_dir, tmp_path):
+    def test_to_elan_files_round_trip_real_files(self, reference_corpus_dir, tmp_path):
         from rustling.elan import ELAN
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         out_dir = str(tmp_path / "output")
         reader.to_elan_files(out_dir)
         elan = ELAN.from_dir(out_dir)
@@ -1289,10 +1609,8 @@ class TestPopAndStitch:
         reader.append(popped)
         assert reader.n_files == n
 
-    def test_pop_and_append_real_files(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_pop_and_append_real_files(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         n = reader.n_files
         all_words = reader.words()
         popped = reader.pop()
@@ -1529,28 +1847,22 @@ class TestHeadersMultipleFiles:
 
 
 class TestHeadersRealFiles:
-    def test_headers_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_headers_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         headers = reader.headers()
         assert len(headers) == reader.n_files
         for h in headers:
             assert isinstance(h, Headers)
 
-    def test_languages_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_languages_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         langs = reader.languages(by_file=True)
         assert len(langs) == reader.n_files
         for file_langs in langs:
             assert isinstance(file_langs, list)
 
-    def test_participants_from_dir(self, testchat_good_dir):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            reader = CHAT.from_dir(str(testchat_good_dir), strict=False)
+    def test_participants_from_dir(self, reference_corpus_dir):
+        reader = CHAT.from_dir(str(reference_corpus_dir), strict=False)
         parts = reader.participants(by_file=True)
         assert len(parts) == reader.n_files
         for file_parts in parts:
@@ -1641,6 +1953,33 @@ class TestStrictMode:
         assert utts[0].tokens == []
         assert utts[0].tiers is not None
         assert "%mor" in utts[0].tiers
+
+    def test_truncated_report_names_hidden_misalignments(self, tmp_path):
+        """The 50-problem cap must not silently swallow a whole channel.
+
+        chatter's diagnostics and rustling's misalignments are collected one
+        channel after the other, so a bulk load carrying enough diagnostics to
+        fill the cap pushes every misalignment past it. Reporting a bare count
+        there would tell a caller nothing was misaligned when something was.
+        """
+        # Each file trips two chatter rules (no `@UTF8`, no `@End`).
+        bad = (
+            "@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n"
+            "@ID:\teng|test|CHI|||||Target_Child|||\n*CHI:\thi .\n"
+        )
+        for i in range(30):
+            (tmp_path / f"bad{i:02d}.cha").write_text(bad)
+        # Sorts last, so it lands past the cap.
+        (tmp_path / "zz.cha").write_text(
+            "@UTF8\n@Begin\n@Languages:\teng\n@Participants:\tCHI Target_Child\n"
+            "@ID:\teng|test|CHI|||||Target_Child|||\n"
+            "*CHI:\tI want a cookie .\n%mor:\tpro|I v|want .\n@End\n"
+        )
+        with pytest.raises(ValueError) as exc_info:
+            CHAT.from_dir(str(tmp_path), strict=True)
+        msg = str(exc_info.value)
+        assert "more not shown" in msg, "fixture stopped exceeding the cap"
+        assert "1 of them a mor/word misalignment" in msg
 
 
 class TestDevelopmentalMeasures:

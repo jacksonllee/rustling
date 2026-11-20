@@ -1,12 +1,23 @@
 [package]
 name = "rustling"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "A high-performance library for computational linguistics"
 license = "MIT"
 repository = "https://github.com/jacksonllee/rustling"
 documentation = "https://docs.rs/rustling"
 readme = "README.md"
+# Not published to crates.io while CHAT parsing depends on the git-pinned
+# TalkBank chatter crates (talkbank-model / talkbank-parser): crates.io rejects
+# git dependencies outright. Releases still go to PyPI and GitHub (git
+# dependencies do not block maturin wheel building), and Rust users depend on
+# a release tag of this repository instead, e.g.
+# `rustling = { git = "https://github.com/jacksonllee/rustling", tag = "v0.10.0" }`.
+# When chatter ships to crates.io (planned for its 1.0 release), the git deps
+# become version deps, this line is removed, and the rust-publish job in
+# release.yml is re-enabled. `publish = false` guards against an accidental
+# `cargo publish`.
+publish = false
 keywords = [
     # At most 5 keywords per crate. Each keyword must have fewer than 20 characters.
     "linguistics",
@@ -21,7 +32,7 @@ name = "rustling"
 crate-type = ["rlib"]
 
 [dependencies]
-pyo3 = { version = "0.30.1", features = ["abi3-py310"], optional = true }
+pyo3 = { version = "0.30.1", features = ["abi3-py311"], optional = true }
 rand = "0.10"
 rayon = { version = "1.10", optional = true }
 fancy-regex = "0.20"
@@ -32,9 +43,23 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
-zip = "9"
+zip = "9.0.5"
 quick-xml = { version = "0.42", features = ["serialize"] }
 zstd = "0.14"
+# Official TalkBank CHAT model + parser. Pinned to a git tag until chatter is
+# published to crates.io (planned for its 1.0 release). talkbank-model is the
+# typed CHAT AST + validation (pure Rust, wasm-clean); the parser backend is
+# target-gated below (tree-sitter natively, pure-Rust re2c on wasm).
+talkbank-model = { git = "https://github.com/TalkBank/chatter", tag = "v0.34.3" }
+
+# Native targets use the official tree-sitter-backed parser (compiles C via cc).
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+talkbank-parser = { git = "https://github.com/TalkBank/chatter", tag = "v0.34.3" }
+
+# WASM (Pyodide/emscripten) uses the pure-Rust re2c parser to avoid compiling
+# tree-sitter's C runtime under emscripten.
+[target.'cfg(target_family = "wasm")'.dependencies]
+talkbank-parser-re2c = { git = "https://github.com/TalkBank/chatter", tag = "v0.34.3" }
 
 [dev-dependencies]
 tempfile = "3"

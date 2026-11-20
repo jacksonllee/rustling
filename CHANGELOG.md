@@ -5,7 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-11-20
+
+This release is available from PyPI and GitHub, but not from crates.io:
+`chatter` is not yet on crates.io, and crates.io does not accept a crate with
+git dependencies. Rust users can depend on the release tag instead:
+`rustling = { git = "https://github.com/jacksonllee/rustling", tag = "v0.10.0" }`.
+The Rust API documentation on docs.rs remains at v0.9.0; run `cargo doc --open`
+in a project depending on rustling for the current version.
+
+### Changed
+
+- CHAT parsing and validation are now powered by the official TalkBank
+  [`chatter`](https://github.com/TalkBank/chatter) crates, replacing rustling's
+  own hand-written CHAT parser and validator. The Python API is unchanged.
+- **BREAKING:** `strict=True` now uses `chatter`'s validation, which is
+  stricter. Files that loaded before may be rejected, e.g., for a missing
+  `@UTF8` / `@Begin` / `@End`, a blank line, or a header with nothing after its
+  colon (such as an empty `@Comment:`).
+- **BREAKING:** `strict=True` errors list every problem found rather than only
+  the first, each tagged with `chatter`'s error code
+  (e.g., `[E305 MissingTerminator]`).
+- **BREAKING:** `CHAT.from_strs` with `strict=True` checks only mor/word
+  alignment, because `chatter` validates whole files only. Use
+  `CHAT.from_files` or `CHAT.from_dir` to validate complete transcripts.
+- `to_strs` and `to_files` now write the source as it was read; continuation
+  lines are no longer joined onto the line above.
+
+### Added
+
+- `CHAT.diagnostics` returns the problems `chatter` reported for the loaded
+  files. It is available after a `strict=False` load too, though without
+  `strict=True` it covers parsing problems only.
+- Support for Python 3.15.
+
+### Removed
+
+- Dropped support for Python 3.10.
+
+### Known limitations
+
+- The `[x N]` repetition marker is not supported by `chatter`:
+  `strict=True` rejects files containing it, and with `strict=False` the
+  affected utterance's tokens can be wrong. `Utterance.audible` still expands
+  it (e.g., `play [x 3]` -> `play play play`).
 
 ## [0.9.0] - 2026-07-20
 

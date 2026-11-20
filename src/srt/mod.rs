@@ -403,23 +403,29 @@ mod reader {
         }
 
         /// Convert to a [`Chat`](crate::chat::Chat) object.
+        ///
+        /// Builds the CHAT files from the generated text directly rather than
+        /// re-parsing it: a subtitle body is source text, not CHAT markup, and
+        /// a CHAT grammar drops whatever punctuation it cannot account for.
+        /// See [`crate::chat::from_generated`].
         fn to_chat_obj(&self) -> crate::chat::Chat {
             let strs = self.to_chat_strings();
-            let ids: Vec<String> = self
+            let files: Vec<crate::chat::ChatFile> = self
                 .files()
                 .iter()
-                .map(|f| {
+                .zip(strs.iter())
+                .map(|(f, text)| {
                     let path = std::path::Path::new(&f.file_path);
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if uuid::Uuid::try_parse(stem).is_ok() {
+                    let id = if uuid::Uuid::try_parse(stem).is_ok() {
                         f.file_path.clone()
                     } else {
                         format!("{stem}.cha")
-                    }
+                    };
+                    crate::chat::from_generated::chat_file_from_generated(text, id)
                 })
                 .collect();
-            let (chat, _) = crate::chat::Chat::from_strs(strs, Some(ids), false, None, None);
-            chat
+            crate::chat::Chat::from_chat_files(files)
         }
 
         /// Write CHAT (.cha) files to a directory.
@@ -709,7 +715,7 @@ mod reader {
             let mut entry_names: Vec<String> = (0..archive.len())
                 .filter_map(|i| {
                     let entry = archive.by_index(i).ok()?;
-                    let name = entry.name().to_string();
+                    let name = entry.name().ok()?.to_string();
                     if name.ends_with(extension) && !entry.is_dir() {
                         Some(name)
                     } else {
