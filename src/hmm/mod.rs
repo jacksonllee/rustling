@@ -802,6 +802,13 @@ pub trait BaseHiddenMarkovModel: Sized + Clone + Sync {
 
             for i in 0..n {
                 let row_total = logsumexp(&acc.log_trans_acc[i]);
+                // A state with zero expected outgoing transitions (e.g., it
+                // only occurs sequence-finally, as in single-token sequences)
+                // gives no evidence about its row. Keep the existing row
+                // rather than normalizing by zero, which would produce NaNs.
+                if row_total == f64::NEG_INFINITY {
+                    continue;
+                }
                 for j in 0..n {
                     self.log_transition_mut()[i][j] = acc.log_trans_acc[i][j] - row_total;
                 }
@@ -810,6 +817,11 @@ pub trait BaseHiddenMarkovModel: Sized + Clone + Sync {
             for f in 0..n_features {
                 for i in 0..n {
                     let row_total = logsumexp(&acc.log_emit_acc[f][i]);
+                    // Likewise, a state with zero expected occupancy gives no
+                    // evidence about its emissions. Keep the existing row.
+                    if row_total == f64::NEG_INFINITY {
+                        continue;
+                    }
                     for k in 0..vocab_sizes[f] {
                         self.feature_log_emissions_mut()[f][i][k] =
                             acc.log_emit_acc[f][i][k] - row_total;
@@ -1385,6 +1397,77 @@ mod tests {
             vec!["b".into(), "a".into(), "b".into(), "b".into()],
             vec!["a".into(), "a".into(), "a".into(), "b".into()],
         ]
+    }
+
+    #[test]
+    fn test_singleton_em_retains_transitions() {
+        let mut model = HiddenMarkovModel::new(2, 3, 1e-6, 1.0, Some(42), None).unwrap();
+        model
+            .fit(
+                vec![vec!["a".into(), "b".into()], vec!["b".into(), "a".into()]],
+                Some(vec![
+                    vec!["X".into(), "Y".into()],
+                    vec!["Y".into(), "X".into()],
+                ]),
+            )
+            .unwrap();
+        let transitions = model.log_transition.clone();
+        model
+            .fit(
+                vec![vec!["a".into()], vec!["b".into()], vec!["a".into()]],
+                None,
+            )
+            .unwrap();
+        assert_eq!(model.log_transition, transitions);
+        let score = model.score(vec![vec!["a".into(), "b".into()]]).unwrap()[0];
+        assert!(score.is_finite());
+    }
+
+    #[test]
+    fn test_em_retains_only_unobserved_transition_rows() {
+        let mut model = HiddenMarkovModel::new(2, 1, 0.0, 1.0, Some(42), None).unwrap();
+        let sequence = vec!["a".into(), "b".into()];
+        model.build_vocab(std::slice::from_ref(&sequence));
+        model.log_initial = vec![0.0, f64::NEG_INFINITY];
+        model.log_transition = vec![vec![0.25_f64.ln(), 0.75_f64.ln()], vec![0.5_f64.ln(); 2]];
+        model.feature_log_emissions = vec![vec![
+            vec![0.0, f64::NEG_INFINITY],
+            vec![f64::NEG_INFINITY, 0.0],
+        ]];
+        model.fitted = true;
+        let terminal_row = model.log_transition[1].clone();
+        model.fit(vec![sequence], None).unwrap();
+        assert_eq!(model.log_transition[0], vec![f64::NEG_INFINITY, 0.0]);
+        assert_eq!(model.log_transition[1], terminal_row);
+        let score = model
+            .score(vec![vec!["a".into(), "b".into(), "b".into()]])
+            .unwrap()[0];
+        assert!((score - 0.5_f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_em_retains_emission_rows_of_unvisited_states() {
+        // State 1 is unreachable (zero initial and incoming probability), so
+        // its expected occupancy is zero and its emission row must survive EM
+        // unchanged instead of becoming NaN.
+        let mut model = HiddenMarkovModel::new(2, 1, 0.0, 1.0, Some(42), None).unwrap();
+        model.build_vocab(&[vec!["a".into(), "b".into(), "c".into()]]);
+        model.log_initial = vec![0.0, f64::NEG_INFINITY];
+        model.log_transition = vec![vec![0.0, f64::NEG_INFINITY], vec![0.5_f64.ln(); 2]];
+        let unvisited_row = vec![0.2_f64.ln(), 0.3_f64.ln(), 0.5_f64.ln()];
+        model.feature_log_emissions =
+            vec![vec![vec![(1.0_f64 / 3.0).ln(); 3], unvisited_row.clone()]];
+        model.fitted = true;
+        model.fit(vec![vec!["a".into(), "b".into()]], None).unwrap();
+        assert_eq!(model.feature_vocabs[0].len(), 3);
+        assert_eq!(model.feature_log_emissions[0][1], unvisited_row);
+        assert!(
+            model.feature_log_emissions[0][0]
+                .iter()
+                .all(|x| !x.is_nan())
+        );
+        let score = model.score(vec![vec!["a".into(), "b".into()]]).unwrap()[0];
+        assert!((score - 0.25_f64.ln()).abs() < 1e-12);
     }
 
     // --- logsumexp tests ---

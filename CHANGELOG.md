@@ -43,6 +43,16 @@ in a project depending on rustling for the current version.
 
 - Dropped support for Python 3.10.
 
+### Fixed
+
+- `HiddenMarkovModel.fit` without labels (Baum-Welch EM) no longer corrupts
+  the model when a state has no expected transitions or emissions in the
+  training data, e.g., when training only on single-token sequences. Such
+  rows previously became NaN, after which every multi-token sequence scored
+  `-inf`; they now keep their existing values.
+  ([#36](https://github.com/jacksonllee/rustling/pull/36), thanks to
+  [@antonsoo](https://github.com/antonsoo))
+
 ### Known limitations
 
 - The `[x N]` repetition marker is not supported by `chatter`:
