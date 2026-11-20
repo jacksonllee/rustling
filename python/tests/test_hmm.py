@@ -160,6 +160,51 @@ def test_fit_with_empty_sequences():
     assert len(result[0]) == 2
 
 
+EMPTY_BATCHES = [
+    ([], None),
+    ([[]], None),
+    ([[], []], None),
+    ([], []),
+    ([[]], [[]]),
+    ([[], []], [[], []]),
+]
+EMPTY_BATCH_TRAINING = [["a", "b", "a"], ["b", "a", "b"]]
+
+
+@pytest.mark.parametrize("sequences, labels", EMPTY_BATCHES)
+def test_empty_fit_allows_later_cold_training(sequences, labels):
+    """Fitting on no usable data should leave a fresh model unfitted."""
+    model = HiddenMarkovModel(n_states=2, n_iter=3, random_seed=42)
+    model.fit(sequences, labels=labels)
+
+    with pytest.raises(ValueError, match="not been fitted"):
+        model.score(EMPTY_BATCH_TRAINING)
+    with pytest.raises(ValueError, match="not been fitted"):
+        model.predict(EMPTY_BATCH_TRAINING)
+
+    model.fit(EMPTY_BATCH_TRAINING)
+    reference = HiddenMarkovModel(n_states=2, n_iter=3, random_seed=42)
+    reference.fit(EMPTY_BATCH_TRAINING)
+    assert model.score(EMPTY_BATCH_TRAINING) == reference.score(EMPTY_BATCH_TRAINING)
+    assert model.predict(EMPTY_BATCH_TRAINING) == reference.predict(
+        EMPTY_BATCH_TRAINING
+    )
+
+
+@pytest.mark.parametrize("sequences, labels", EMPTY_BATCHES)
+def test_empty_fit_preserves_trained_model(sequences, labels):
+    """Fitting on no usable data should leave a trained model unchanged."""
+    model = HiddenMarkovModel(n_states=2, n_iter=3, random_seed=42)
+    model.fit(EMPTY_BATCH_TRAINING, labels=[["X", "Y", "X"], ["Y", "X", "Y"]])
+    scores = model.score(EMPTY_BATCH_TRAINING)
+    predictions = model.predict(EMPTY_BATCH_TRAINING)
+
+    model.fit(sequences, labels=labels)
+
+    assert model.score(EMPTY_BATCH_TRAINING) == scores
+    assert model.predict(EMPTY_BATCH_TRAINING) == predictions
+
+
 @pytest.mark.parametrize("warm_start", [False, True])
 @pytest.mark.parametrize("n_iter", [1, 3, 10])
 def test_singleton_training_preserves_multi_token_inference(warm_start, n_iter):

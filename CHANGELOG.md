@@ -52,6 +52,12 @@ in a project depending on rustling for the current version.
   `-inf`; they now keep their existing values.
   ([#36](https://github.com/jacksonllee/rustling/pull/36), thanks to
   [@antonsoo](https://github.com/antonsoo))
+- Training `HiddenMarkovModel` (`fit`) or `HiddenMarkovModelSegmenter`
+  (`fit_segmented`) on data with no non-empty sequences no longer marks an
+  untrained model as fitted. Previously, the next real training call then
+  panicked; now the empty call leaves the model as it was.
+  ([#37](https://github.com/jacksonllee/rustling/pull/37), thanks to
+  [@antonsoo](https://github.com/antonsoo))
 
 ### Known limitations
 

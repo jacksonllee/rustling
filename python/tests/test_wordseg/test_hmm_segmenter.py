@@ -1,5 +1,7 @@
 """Tests for rustling.wordseg.HiddenMarkovModelSegmenter."""
 
+import pytest
+
 from rustling.wordseg import HiddenMarkovModelSegmenter
 
 
@@ -109,10 +111,36 @@ def test_init_with_gamma():
     assert "".join(result[0]) == "helloworld"
 
 
-def test_fit_empty_data():
-    """Test fitting with empty training data."""
-    segmenter = HiddenMarkovModelSegmenter()
-    segmenter.fit_segmented([])
+@pytest.mark.parametrize("empty", [[], [[]], [[""]]])
+def test_fit_empty_data_keeps_untrained_fallback(empty):
+    """Fitting on no usable data should leave a fresh segmenter untrained."""
+    model = HiddenMarkovModelSegmenter(n_iter=3, random_seed=42)
+    model.fit_segmented(empty)
+
+    assert model.predict(["你好世界"]) == [list("你好世界")]
+    assert model.predict(["你好"], offsets=True) == [[("你", (0, 1)), ("好", (1, 2))]]
+    with pytest.raises(ValueError, match="not been fitted"):
+        model.score([["你好", "世界"]])
+
+    training = ["你好世界", "世界你好"]
+    model.fit_unsegmented(training)
+    reference = HiddenMarkovModelSegmenter(n_iter=3, random_seed=42)
+    reference.fit_unsegmented(training)
+    assert model.score([["你好", "世界"]]) == reference.score([["你好", "世界"]])
+    assert model.predict(training) == reference.predict(training)
+
+
+@pytest.mark.parametrize("empty", [[], [[]], [[""]]])
+def test_fit_empty_data_preserves_trained_model(empty):
+    """Fitting on no usable data should leave a trained segmenter unchanged."""
+    model = HiddenMarkovModelSegmenter(n_iter=3, random_seed=42)
+    training = [["你好", "世界"], ["世界", "你好"]]
+    model.fit_segmented(training)
+    before = model.score(training), model.predict(["你好世界"], offsets=True)
+
+    model.fit_segmented(empty)
+
+    assert (model.score(training), model.predict(["你好世界"], offsets=True)) == before
 
 
 def test_predict_offsets():
